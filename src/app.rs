@@ -166,11 +166,11 @@ pub enum LogLevel {
 impl LogLevel {
     pub fn symbol(&self) -> &'static str {
         match self {
-            LogLevel::Info => "ℹ",
-            LogLevel::Success => "✓",
-            LogLevel::Warning => "⚠",
-            LogLevel::Error => "✗",
-            LogLevel::Debug => "⚙",
+            LogLevel::Info => "[i]",
+            LogLevel::Success => "[+]",
+            LogLevel::Warning => "[!]",
+            LogLevel::Error => "[x]",
+            LogLevel::Debug => "[*]",
         }
     }
 }

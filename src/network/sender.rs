@@ -504,64 +504,79 @@ impl PacketSender {
         responses
     }
 
-    /// Get service-specific probe payload for UDP scanning
-    pub fn get_udp_probe(port: u16) -> Vec<u8> {
+    /// Get service-specific probe payload for UDP scanning (zero-copy)
+    #[inline]
+    pub fn get_udp_probe(port: u16) -> &'static [u8] {
+        // Static probe payloads - no allocation on each call
+        static DNS_PROBE: &[u8] = &[
+            0x00, 0x01, // Transaction ID
+            0x01, 0x00, // Flags: standard query
+            0x00, 0x01, // Questions: 1
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Answer/Authority/Additional: 0
+            0x07, b'v', b'e', b'r', b's', b'i', b'o', b'n', // "version"
+            0x04, b'b', b'i', b'n', b'd', // "bind"
+            0x00, // Root
+            0x00, 0x10, // Type: TXT
+            0x00, 0x03, // Class: CH (Chaos)
+        ];
+
+        static NTP_PROBE: &[u8] = &[
+            0x1b, 0x00, 0x00, 0x00, // LI/VN/Mode, Stratum, Poll, Precision
+            0x00, 0x00, 0x00, 0x00, // Root Delay
+            0x00, 0x00, 0x00, 0x00, // Root Dispersion
+            0x00, 0x00, 0x00, 0x00, // Reference ID
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Reference Timestamp
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Originate Timestamp
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Receive Timestamp
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Transmit Timestamp
+        ];
+
+        static SNMP_PROBE: &[u8] = &[
+            0x30, 0x26, // SEQUENCE
+            0x02, 0x01, 0x00, // Version: 0 (v1)
+            0x04, 0x06, b'p', b'u', b'b', b'l', b'i', b'c', // Community: "public"
+            0xa0, 0x19, // GetRequest-PDU
+            0x02, 0x04, 0x00, 0x00, 0x00, 0x01, // Request ID
+            0x02, 0x01, 0x00, // Error status
+            0x02, 0x01, 0x00, // Error index
+            0x30, 0x0b, // VarBindList
+            0x30, 0x09, // VarBind
+            0x06, 0x05, 0x2b, 0x06, 0x01, 0x02, 0x01, // OID: 1.3.6.1.2.1
+            0x05, 0x00, // NULL
+        ];
+
+        static SSDP_PROBE: &[u8] = b"M-SEARCH * HTTP/1.1\r\nHost: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 1\r\nST: ssdp:all\r\n\r\n";
+
+        static NETBIOS_PROBE: &[u8] = &[
+            0x80, 0x94, // Transaction ID
+            0x00, 0x00, // Flags
+            0x00, 0x01, // Questions
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Answers/Authority/Additional
+            0x20, // Name length (encoded)
+            b'C', b'K', b'A', b'A', b'A', b'A', b'A', b'A', // Encoded "*" wildcard
+            b'A', b'A', b'A', b'A', b'A', b'A', b'A', b'A',
+            b'A', b'A', b'A', b'A', b'A', b'A', b'A', b'A',
+            b'A', b'A', b'A', b'A', b'A', b'A', b'A', b'A',
+            0x00, // Name terminator
+            0x00, 0x21, // Type: NBSTAT
+            0x00, 0x01, // Class: IN
+        ];
+
+        static SIP_PROBE: &[u8] = b"OPTIONS sip:nm SIP/2.0\r\nVia: SIP/2.0/UDP nm;branch=z9hG4bK\r\nMax-Forwards: 70\r\nFrom: <sip:nm@nm>;tag=root\r\nTo: <sip:nm@nm>\r\nCall-ID: 1\r\nCSeq: 1 OPTIONS\r\nContact: <sip:nm@nm>\r\nContent-Length: 0\r\n\r\n";
+
+        static TFTP_PROBE: &[u8] = &[0x00, 0x01, b't', b'e', b's', b't', 0x00, b'o', b'c', b't', b'e', b't', 0x00];
+
+        static EMPTY_PROBE: &[u8] = &[];
+
         match port {
-            // DNS - simple A query for version.bind
-            53 => vec![
-                0x00, 0x01, // Transaction ID
-                0x01, 0x00, // Flags: standard query
-                0x00, 0x01, // Questions: 1
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Answer/Authority/Additional: 0
-                0x07, b'v', b'e', b'r', b's', b'i', b'o', b'n', // "version"
-                0x04, b'b', b'i', b'n', b'd', // "bind"
-                0x00, // Root
-                0x00, 0x10, // Type: TXT
-                0x00, 0x03, // Class: CH (Chaos)
-            ],
-            // NTP - client mode request
-            123 => {
-                let mut ntp = vec![0u8; 48];
-                ntp[0] = 0x1b; // LI=0, VN=3, Mode=3 (client)
-                ntp
-            },
-            // SNMP - GetRequest for sysDescr
-            161 => vec![
-                0x30, 0x26, // SEQUENCE
-                0x02, 0x01, 0x00, // Version: 0 (v1)
-                0x04, 0x06, b'p', b'u', b'b', b'l', b'i', b'c', // Community: "public"
-                0xa0, 0x19, // GetRequest-PDU
-                0x02, 0x04, 0x00, 0x00, 0x00, 0x01, // Request ID
-                0x02, 0x01, 0x00, // Error status
-                0x02, 0x01, 0x00, // Error index
-                0x30, 0x0b, // VarBindList
-                0x30, 0x09, // VarBind
-                0x06, 0x05, 0x2b, 0x06, 0x01, 0x02, 0x01, // OID: 1.3.6.1.2.1
-                0x05, 0x00, // NULL
-            ],
-            // SSDP - M-SEARCH discovery
-            1900 => b"M-SEARCH * HTTP/1.1\r\nHost: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 1\r\nST: ssdp:all\r\n\r\n".to_vec(),
-            // NetBIOS Name Service
-            137 => vec![
-                0x80, 0x94, // Transaction ID
-                0x00, 0x00, // Flags
-                0x00, 0x01, // Questions
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Answers/Authority/Additional
-                0x20, // Name length (encoded)
-                b'C', b'K', b'A', b'A', b'A', b'A', b'A', b'A', // Encoded "*" wildcard
-                b'A', b'A', b'A', b'A', b'A', b'A', b'A', b'A',
-                b'A', b'A', b'A', b'A', b'A', b'A', b'A', b'A',
-                b'A', b'A', b'A', b'A', b'A', b'A', b'A', b'A',
-                0x00, // Name terminator
-                0x00, 0x21, // Type: NBSTAT
-                0x00, 0x01, // Class: IN
-            ],
-            // SIP - OPTIONS request
-            5060 => b"OPTIONS sip:nm SIP/2.0\r\nVia: SIP/2.0/UDP nm;branch=z9hG4bK\r\nMax-Forwards: 70\r\nFrom: <sip:nm@nm>;tag=root\r\nTo: <sip:nm@nm>\r\nCall-ID: 1\r\nCSeq: 1 OPTIONS\r\nContact: <sip:nm@nm>\r\nContent-Length: 0\r\n\r\n".to_vec(),
-            // TFTP - Read request
-            69 => vec![0x00, 0x01, b't', b'e', b's', b't', 0x00, b'o', b'c', b't', b'e', b't', 0x00],
-            // Default: empty probe
-            _ => vec![],
+            53 => DNS_PROBE,
+            123 => NTP_PROBE,
+            161 => SNMP_PROBE,
+            1900 => SSDP_PROBE,
+            137 => NETBIOS_PROBE,
+            5060 => SIP_PROBE,
+            69 => TFTP_PROBE,
+            _ => EMPTY_PROBE,
         }
     }
 

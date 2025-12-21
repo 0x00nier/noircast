@@ -1,59 +1,32 @@
 //! NTP protocol packet builder
 
-pub struct NtpPacket {
-    li_vn_mode: u8,
-    stratum: u8,
-    poll: u8,
-    precision: i8,
-    root_delay: u32,
-    root_dispersion: u32,
-    reference_id: [u8; 4],
-    reference_timestamp: u64,
-    originate_timestamp: u64,
-    receive_timestamp: u64,
-    transmit_timestamp: u64,
-}
+/// Pre-built NTP client request packet (48 bytes)
+/// LI=0, VN=3, Mode=3 (client), all timestamps zero
+static NTP_CLIENT_PACKET: [u8; 48] = [
+    0x1b, 0x00, 0x00, 0x00, // LI/VN/Mode, Stratum, Poll, Precision
+    0x00, 0x00, 0x00, 0x00, // Root Delay
+    0x00, 0x00, 0x00, 0x00, // Root Dispersion
+    0x00, 0x00, 0x00, 0x00, // Reference ID
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Reference Timestamp
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Originate Timestamp
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Receive Timestamp
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Transmit Timestamp
+];
+
+/// NTP client request packet builder
+pub struct NtpPacket;
 
 impl NtpPacket {
+    /// Create a new NTP client request packet
+    #[inline]
     pub fn new() -> Self {
-        Self {
-            li_vn_mode: 0x1b,
-            stratum: 0,
-            poll: 0,
-            precision: 0,
-            root_delay: 0,
-            root_dispersion: 0,
-            reference_id: [0; 4],
-            reference_timestamp: 0,
-            originate_timestamp: 0,
-            receive_timestamp: 0,
-            transmit_timestamp: Self::current_ntp_timestamp(),
-        }
+        Self
     }
 
-    fn current_ntp_timestamp() -> u64 {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        const NTP_UNIX_OFFSET: u64 = 2208988800;
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
-        let secs = now.as_secs() + NTP_UNIX_OFFSET;
-        let frac = ((now.subsec_nanos() as u64) << 32) / 1_000_000_000;
-        (secs << 32) | frac
-    }
-
+    /// Build the NTP packet (uses pre-built static template)
+    #[inline]
     pub fn build(&self) -> Vec<u8> {
-        let mut packet = Vec::with_capacity(48);
-        packet.push(self.li_vn_mode);
-        packet.push(self.stratum);
-        packet.push(self.poll);
-        packet.push(self.precision as u8);
-        packet.extend_from_slice(&self.root_delay.to_be_bytes());
-        packet.extend_from_slice(&self.root_dispersion.to_be_bytes());
-        packet.extend_from_slice(&self.reference_id);
-        packet.extend_from_slice(&self.reference_timestamp.to_be_bytes());
-        packet.extend_from_slice(&self.originate_timestamp.to_be_bytes());
-        packet.extend_from_slice(&self.receive_timestamp.to_be_bytes());
-        packet.extend_from_slice(&self.transmit_timestamp.to_be_bytes());
-        packet
+        NTP_CLIENT_PACKET.to_vec()
     }
 }
 

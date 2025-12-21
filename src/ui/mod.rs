@@ -675,7 +675,7 @@ fn render_flag_selection(frame: &mut Frame, app: &App, area: Rect) {
             let is_selected = app.selected_flags.contains(flag);
             let is_cursor = is_active && i == app.flag_list_index;
 
-            let checkbox = if is_selected { "[✓]" } else { "[ ]" };
+            let checkbox = if is_selected { "[x]" } else { "[ ]" };
             let flag_style = if is_selected {
                 Style::default().fg(ACCENT_BRIGHT).bold()
             } else {
