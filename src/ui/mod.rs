@@ -417,138 +417,234 @@ fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
             frame.render_widget(list, inner);
         }
         Protocol::Ntp | Protocol::Raw => {
-            // Show packet templates for quick selection
+            // Show packet templates for quick selection with scrolling
             let templates = PacketTemplate::all();
-            let items: Vec<ListItem> = templates.iter().enumerate().map(|(i, tmpl)| {
-                let is_cursor = is_active && i == app.scan_type_index;
-                let style = if is_cursor {
-                    Style::default().fg(FG_PRIMARY).bg(FG_DIM)
-                } else {
-                    Style::default().fg(FG_SECONDARY)
-                };
-                ListItem::new(Line::from(vec![
-                    Span::styled(format!("{:10}", tmpl.name()), style),
-                    Span::styled(format!(" [{}]", tmpl.shortcut()), Style::default().fg(FG_DIM)),
-                ]))
-            }).collect();
+            let visible_lines = inner.height.saturating_sub(1) as usize; // -1 for title
 
-            let list = List::new(items).block(Block::default().title("Templates").title_style(
+            // Calculate scroll offset to keep cursor visible
+            let scroll_offset = if app.scan_type_index >= visible_lines {
+                app.scan_type_index.saturating_sub(visible_lines - 1)
+            } else {
+                0
+            };
+
+            let items: Vec<ListItem> = templates.iter().enumerate()
+                .skip(scroll_offset)
+                .take(visible_lines)
+                .map(|(i, tmpl)| {
+                    let is_cursor = is_active && i == app.scan_type_index;
+                    let style = if is_cursor {
+                        Style::default().fg(FG_PRIMARY).bg(FG_DIM)
+                    } else {
+                        Style::default().fg(FG_SECONDARY)
+                    };
+                    ListItem::new(Line::from(vec![
+                        Span::styled(format!("{:10}", tmpl.name()), style),
+                        Span::styled(format!(" [{}]", tmpl.shortcut()), Style::default().fg(FG_DIM)),
+                    ]))
+                }).collect();
+
+            let title = if scroll_offset > 0 || templates.len() > visible_lines {
+                format!("Templates ({}/{})", app.scan_type_index + 1, templates.len())
+            } else {
+                "Templates".to_string()
+            };
+
+            let list = List::new(items).block(Block::default().title(title).title_style(
                 Style::default().fg(FG_SECONDARY).add_modifier(Modifier::DIM),
             ));
             frame.render_widget(list, inner);
         }
         Protocol::Snmp => {
-            let info = vec![
+            let versions = [("v1", 1u8), ("v2c", 2), ("v3", 3)];
+            let items: Vec<ListItem> = versions.iter().enumerate().map(|(i, (name, ver))| {
+                let is_selected = app.snmp_version == *ver;
+                let is_cursor = is_active && i == app.scan_type_index;
+                let marker = if is_selected { "●" } else { "○" };
+                let style = if is_selected {
+                    Style::default().fg(ACCENT_BRIGHT).bold()
+                } else if is_cursor {
+                    Style::default().fg(FG_PRIMARY).bg(FG_DIM)
+                } else {
+                    Style::default().fg(FG_SECONDARY)
+                };
                 ListItem::new(Line::from(vec![
-                    Span::styled("Community: ", Style::default().fg(FG_SECONDARY)),
-                    Span::styled("public", Style::default().fg(ACCENT_BRIGHT)),
-                ])),
-                ListItem::new(Line::from(vec![
-                    Span::styled("Use ", Style::default().fg(FG_HINT)),
-                    Span::styled(":snmp", Style::default().fg(ACCENT)),
-                    Span::styled(" to build packet", Style::default().fg(FG_HINT)),
-                ])),
-            ];
-            let list = List::new(info);
+                    Span::styled(format!("{} ", marker), style),
+                    Span::styled(format!("SNMP {}", name), style),
+                ]))
+            }).collect();
+
+            let list = List::new(items).block(Block::default().title("Version").title_style(
+                Style::default().fg(FG_SECONDARY).add_modifier(Modifier::DIM),
+            ));
             frame.render_widget(list, inner);
         }
         Protocol::Ssdp => {
-            let info = vec![
+            let targets = [("ssdp:all", 0u8), ("upnp:rootdevice", 1), ("Custom ST", 2)];
+            let items: Vec<ListItem> = targets.iter().enumerate().map(|(i, (name, idx))| {
+                let is_selected = app.ssdp_target == *idx;
+                let is_cursor = is_active && i == app.scan_type_index;
+                let marker = if is_selected { "●" } else { "○" };
+                let style = if is_selected {
+                    Style::default().fg(ACCENT_BRIGHT).bold()
+                } else if is_cursor {
+                    Style::default().fg(FG_PRIMARY).bg(FG_DIM)
+                } else {
+                    Style::default().fg(FG_SECONDARY)
+                };
                 ListItem::new(Line::from(vec![
-                    Span::styled("Target: ", Style::default().fg(FG_SECONDARY)),
-                    Span::styled("ssdp:all", Style::default().fg(ACCENT_BRIGHT)),
-                ])),
-                ListItem::new(Line::from(vec![
-                    Span::styled("Use ", Style::default().fg(FG_HINT)),
-                    Span::styled(":ssdp", Style::default().fg(ACCENT)),
-                    Span::styled(" to build packet", Style::default().fg(FG_HINT)),
-                ])),
-            ];
-            let list = List::new(info);
+                    Span::styled(format!("{} ", marker), style),
+                    Span::styled(*name, style),
+                ]))
+            }).collect();
+
+            let list = List::new(items).block(Block::default().title("Search Target").title_style(
+                Style::default().fg(FG_SECONDARY).add_modifier(Modifier::DIM),
+            ));
             frame.render_widget(list, inner);
         }
         Protocol::Smb => {
-            let info = vec![
+            let versions = [("SMB1 (NT LM 0.12)", 1u8), ("SMB2", 2), ("SMB3", 3)];
+            let items: Vec<ListItem> = versions.iter().enumerate().map(|(i, (name, ver))| {
+                let is_selected = app.smb_version == *ver;
+                let is_cursor = is_active && i == app.scan_type_index;
+                let marker = if is_selected { "●" } else { "○" };
+                let style = if is_selected {
+                    Style::default().fg(ACCENT_BRIGHT).bold()
+                } else if is_cursor {
+                    Style::default().fg(FG_PRIMARY).bg(FG_DIM)
+                } else {
+                    Style::default().fg(FG_SECONDARY)
+                };
                 ListItem::new(Line::from(vec![
-                    Span::styled("Dialects: ", Style::default().fg(FG_SECONDARY)),
-                    Span::styled("NT LM 0.12, SMB 2.x", Style::default().fg(ACCENT_BRIGHT)),
-                ])),
-                ListItem::new(Line::from(vec![
-                    Span::styled("Use ", Style::default().fg(FG_HINT)),
-                    Span::styled(":smb :smb1 :smb2", Style::default().fg(ACCENT)),
-                ])),
-            ];
-            let list = List::new(info);
+                    Span::styled(format!("{} ", marker), style),
+                    Span::styled(*name, style),
+                ]))
+            }).collect();
+
+            let list = List::new(items).block(Block::default().title("SMB Version").title_style(
+                Style::default().fg(FG_SECONDARY).add_modifier(Modifier::DIM),
+            ));
             frame.render_widget(list, inner);
         }
         Protocol::Ldap => {
-            let info = vec![
+            let scopes = [("Base (single entry)", 0u8), ("One Level", 1), ("Subtree (recursive)", 2)];
+            let items: Vec<ListItem> = scopes.iter().enumerate().map(|(i, (name, scope))| {
+                let is_selected = app.ldap_scope == *scope;
+                let is_cursor = is_active && i == app.scan_type_index;
+                let marker = if is_selected { "●" } else { "○" };
+                let style = if is_selected {
+                    Style::default().fg(ACCENT_BRIGHT).bold()
+                } else if is_cursor {
+                    Style::default().fg(FG_PRIMARY).bg(FG_DIM)
+                } else {
+                    Style::default().fg(FG_SECONDARY)
+                };
                 ListItem::new(Line::from(vec![
-                    Span::styled("Scope: ", Style::default().fg(FG_SECONDARY)),
-                    Span::styled("Subtree", Style::default().fg(ACCENT_BRIGHT)),
-                ])),
-                ListItem::new(Line::from(vec![
-                    Span::styled("Use ", Style::default().fg(FG_HINT)),
-                    Span::styled(":ldap :ldaprootdse :ldapbase", Style::default().fg(ACCENT)),
-                ])),
-            ];
-            let list = List::new(info);
+                    Span::styled(format!("{} ", marker), style),
+                    Span::styled(*name, style),
+                ]))
+            }).collect();
+
+            let list = List::new(items).block(Block::default().title("Search Scope").title_style(
+                Style::default().fg(FG_SECONDARY).add_modifier(Modifier::DIM),
+            ));
             frame.render_widget(list, inner);
         }
         Protocol::NetBios => {
-            let info = vec![
+            let types = [("Name Query", 0u8), ("Node Status (nbstat)", 1)];
+            let items: Vec<ListItem> = types.iter().enumerate().map(|(i, (name, t))| {
+                let is_selected = app.netbios_type == *t;
+                let is_cursor = is_active && i == app.scan_type_index;
+                let marker = if is_selected { "●" } else { "○" };
+                let style = if is_selected {
+                    Style::default().fg(ACCENT_BRIGHT).bold()
+                } else if is_cursor {
+                    Style::default().fg(FG_PRIMARY).bg(FG_DIM)
+                } else {
+                    Style::default().fg(FG_SECONDARY)
+                };
                 ListItem::new(Line::from(vec![
-                    Span::styled("Query: ", Style::default().fg(FG_SECONDARY)),
-                    Span::styled("Name Query", Style::default().fg(ACCENT_BRIGHT)),
-                ])),
-                ListItem::new(Line::from(vec![
-                    Span::styled("Use ", Style::default().fg(FG_HINT)),
-                    Span::styled(":netbios :nbstat", Style::default().fg(ACCENT)),
-                ])),
-            ];
-            let list = List::new(info);
+                    Span::styled(format!("{} ", marker), style),
+                    Span::styled(*name, style),
+                ]))
+            }).collect();
+
+            let list = List::new(items).block(Block::default().title("Query Type").title_style(
+                Style::default().fg(FG_SECONDARY).add_modifier(Modifier::DIM),
+            ));
             frame.render_widget(list, inner);
         }
         Protocol::Dhcp => {
-            let info = vec![
+            let types = [("Discover", 1u8), ("Request", 3), ("Release", 7)];
+            let items: Vec<ListItem> = types.iter().enumerate().map(|(i, (name, t))| {
+                let is_selected = app.dhcp_type == *t;
+                let is_cursor = is_active && i == app.scan_type_index;
+                let marker = if is_selected { "●" } else { "○" };
+                let style = if is_selected {
+                    Style::default().fg(ACCENT_BRIGHT).bold()
+                } else if is_cursor {
+                    Style::default().fg(FG_PRIMARY).bg(FG_DIM)
+                } else {
+                    Style::default().fg(FG_SECONDARY)
+                };
                 ListItem::new(Line::from(vec![
-                    Span::styled("Type: ", Style::default().fg(FG_SECONDARY)),
-                    Span::styled("DHCP Discover", Style::default().fg(ACCENT_BRIGHT)),
-                ])),
-                ListItem::new(Line::from(vec![
-                    Span::styled("Use ", Style::default().fg(FG_HINT)),
-                    Span::styled(":dhcp :dhcpxid", Style::default().fg(ACCENT)),
-                ])),
-            ];
-            let list = List::new(info);
+                    Span::styled(format!("{} ", marker), style),
+                    Span::styled(format!("DHCP {}", name), style),
+                ]))
+            }).collect();
+
+            let list = List::new(items).block(Block::default().title("Message Type").title_style(
+                Style::default().fg(FG_SECONDARY).add_modifier(Modifier::DIM),
+            ));
             frame.render_widget(list, inner);
         }
         Protocol::Kerberos => {
-            let info = vec![
+            let types = [("AS-REQ (Auth)", 10u8), ("TGS-REQ (Service)", 12)];
+            let items: Vec<ListItem> = types.iter().enumerate().map(|(i, (name, t))| {
+                let is_selected = app.kerberos_type == *t;
+                let is_cursor = is_active && i == app.scan_type_index;
+                let marker = if is_selected { "●" } else { "○" };
+                let style = if is_selected {
+                    Style::default().fg(ACCENT_BRIGHT).bold()
+                } else if is_cursor {
+                    Style::default().fg(FG_PRIMARY).bg(FG_DIM)
+                } else {
+                    Style::default().fg(FG_SECONDARY)
+                };
                 ListItem::new(Line::from(vec![
-                    Span::styled("Type: ", Style::default().fg(FG_SECONDARY)),
-                    Span::styled("AS-REQ", Style::default().fg(ACCENT_BRIGHT)),
-                ])),
-                ListItem::new(Line::from(vec![
-                    Span::styled("Use ", Style::default().fg(FG_HINT)),
-                    Span::styled(":kerberos <realm> <user>", Style::default().fg(ACCENT)),
-                ])),
-            ];
-            let list = List::new(info);
+                    Span::styled(format!("{} ", marker), style),
+                    Span::styled(*name, style),
+                ]))
+            }).collect();
+
+            let list = List::new(items).block(Block::default().title("Request Type").title_style(
+                Style::default().fg(FG_SECONDARY).add_modifier(Modifier::DIM),
+            ));
             frame.render_widget(list, inner);
         }
         Protocol::Arp => {
-            let info = vec![
+            let ops = [("ARP Request (who-has)", 1u8), ("ARP Reply (is-at)", 2)];
+            let items: Vec<ListItem> = ops.iter().enumerate().map(|(i, (name, op))| {
+                let is_selected = app.arp_operation == *op;
+                let is_cursor = is_active && i == app.scan_type_index;
+                let marker = if is_selected { "●" } else { "○" };
+                let style = if is_selected {
+                    Style::default().fg(ACCENT_BRIGHT).bold()
+                } else if is_cursor {
+                    Style::default().fg(FG_PRIMARY).bg(FG_DIM)
+                } else {
+                    Style::default().fg(FG_SECONDARY)
+                };
                 ListItem::new(Line::from(vec![
-                    Span::styled("Type: ", Style::default().fg(FG_SECONDARY)),
-                    Span::styled("ARP Request", Style::default().fg(ACCENT_BRIGHT)),
-                ])),
-                ListItem::new(Line::from(vec![
-                    Span::styled("Use ", Style::default().fg(FG_HINT)),
-                    Span::styled(":arp :arpreply", Style::default().fg(ACCENT)),
-                ])),
-            ];
-            let list = List::new(info);
+                    Span::styled(format!("{} ", marker), style),
+                    Span::styled(*name, style),
+                ]))
+            }).collect();
+
+            let list = List::new(items).block(Block::default().title("Operation").title_style(
+                Style::default().fg(FG_SECONDARY).add_modifier(Modifier::DIM),
+            ));
             frame.render_widget(list, inner);
         }
     }
@@ -698,6 +794,10 @@ fn render_target_config(frame: &mut Frame, app: &App, area: Rect) {
             lines.push(Line::from(vec![
                 Span::styled("Port:   ", Style::default().fg(FG_PRIMARY).bold()),
                 Span::styled("161", Style::default().fg(ACCENT)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("Comm:   ", Style::default().fg(FG_PRIMARY).bold()),
+                Span::styled(&app.snmp_community, Style::default().fg(ACCENT)),
             ]));
         }
         Protocol::Ssdp => {

@@ -69,15 +69,31 @@ fn handle_packet_editor_keys(app: &mut App, key: KeyEvent) {
                 app.packet_editor.field_buffer.pop();
             }
             KeyCode::Char(c) => {
-                // For payload, only allow hex characters
-                if app.packet_editor.current_field == PacketEditorField::Payload {
-                    if c.is_ascii_hexdigit() {
-                        app.packet_editor.field_buffer.push(c.to_ascii_uppercase());
+                match app.packet_editor.current_field {
+                    // Hex-only fields
+                    PacketEditorField::Payload => {
+                        if c.is_ascii_hexdigit() {
+                            app.packet_editor.field_buffer.push(c.to_ascii_uppercase());
+                        }
                     }
-                } else {
-                    // For numeric fields, only allow digits
-                    if c.is_ascii_digit() {
-                        app.packet_editor.field_buffer.push(c);
+                    // Numeric fields
+                    PacketEditorField::SourcePort | PacketEditorField::DestPort |
+                    PacketEditorField::Ttl | PacketEditorField::SeqNum |
+                    PacketEditorField::AckNum | PacketEditorField::WindowSize |
+                    PacketEditorField::IcmpType | PacketEditorField::IcmpCode |
+                    PacketEditorField::IcmpId | PacketEditorField::IcmpSeq |
+                    PacketEditorField::DnsQueryType | PacketEditorField::SnmpVersion |
+                    PacketEditorField::SmbVersion | PacketEditorField::LdapScope |
+                    PacketEditorField::DhcpType | PacketEditorField::ArpOperation => {
+                        if c.is_ascii_digit() {
+                            app.packet_editor.field_buffer.push(c);
+                        }
+                    }
+                    // Text fields (allow most printable characters)
+                    _ => {
+                        if c.is_ascii_graphic() || c == ' ' {
+                            app.packet_editor.field_buffer.push(c);
+                        }
                     }
                 }
             }
@@ -91,10 +107,10 @@ fn handle_packet_editor_keys(app: &mut App, key: KeyEvent) {
                 app.log_debug("Packet editor closed");
             }
             KeyCode::Char('j') | KeyCode::Down => {
-                app.packet_editor.current_field = app.packet_editor.current_field.next();
+                app.packet_editor.current_field = app.packet_editor.current_field.next_for_protocol(app.selected_protocol);
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                app.packet_editor.current_field = app.packet_editor.current_field.prev();
+                app.packet_editor.current_field = app.packet_editor.current_field.prev_for_protocol(app.selected_protocol);
             }
             KeyCode::Enter | KeyCode::Char('i') => {
                 // Start editing current field
@@ -115,6 +131,14 @@ fn handle_packet_editor_keys(app: &mut App, key: KeyEvent) {
                     PacketEditorField::AckNum => {
                         app.packet_editor.ack_num = rand::random();
                         app.log_info(format!("Ack number randomized: {}", app.packet_editor.ack_num));
+                    }
+                    PacketEditorField::IcmpId => {
+                        app.packet_editor.icmp_id = rand::random();
+                        app.log_info(format!("ICMP ID randomized: {}", app.packet_editor.icmp_id));
+                    }
+                    PacketEditorField::IcmpSeq => {
+                        app.packet_editor.icmp_seq = rand::random::<u16>() & 0x7FFF;
+                        app.log_info(format!("ICMP Seq randomized: {}", app.packet_editor.icmp_seq));
                     }
                     _ => {
                         app.log_warning("This field cannot be randomized");
@@ -349,7 +373,8 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent) {
             app.log_info("Logs cleared");
         }
         KeyCode::Char('e') => {
-            // Open packet editor
+            // Open packet editor with protocol-specific fields
+            app.packet_editor.reset_to_protocol(app.selected_protocol);
             app.show_packet_editor = true;
         }
         KeyCode::Char('P') => {
@@ -691,7 +716,76 @@ fn handle_select(app: &mut App) {
                         app.log_info(format!("Selected HTTP method: {}", method));
                     }
                 }
-                _ => {}
+                Protocol::Snmp => {
+                    let versions = [1u8, 2, 3];
+                    if let Some(ver) = versions.get(app.scan_type_index) {
+                        app.snmp_version = *ver;
+                        let name = match ver { 1 => "v1", 2 => "v2c", 3 => "v3", _ => "?" };
+                        app.log_info(format!("Selected SNMP {}", name));
+                    }
+                }
+                Protocol::Ssdp => {
+                    let targets = [0u8, 1, 2];
+                    if let Some(t) = targets.get(app.scan_type_index) {
+                        app.ssdp_target = *t;
+                        let name = match t { 0 => "ssdp:all", 1 => "upnp:rootdevice", _ => "custom" };
+                        app.log_info(format!("Selected SSDP target: {}", name));
+                    }
+                }
+                Protocol::Smb => {
+                    let versions = [1u8, 2, 3];
+                    if let Some(ver) = versions.get(app.scan_type_index) {
+                        app.smb_version = *ver;
+                        app.log_info(format!("Selected SMB{}", ver));
+                    }
+                }
+                Protocol::Ldap => {
+                    let scopes = [0u8, 1, 2];
+                    if let Some(scope) = scopes.get(app.scan_type_index) {
+                        app.ldap_scope = *scope;
+                        let name = match scope { 0 => "Base", 1 => "One Level", _ => "Subtree" };
+                        app.log_info(format!("Selected LDAP scope: {}", name));
+                    }
+                }
+                Protocol::NetBios => {
+                    let types = [0u8, 1];
+                    if let Some(t) = types.get(app.scan_type_index) {
+                        app.netbios_type = *t;
+                        let name = match t { 0 => "Name Query", _ => "Node Status" };
+                        app.log_info(format!("Selected NetBIOS: {}", name));
+                    }
+                }
+                Protocol::Dhcp => {
+                    let types = [1u8, 3, 7];
+                    if let Some(t) = types.get(app.scan_type_index) {
+                        app.dhcp_type = *t;
+                        let name = match t { 1 => "Discover", 3 => "Request", _ => "Release" };
+                        app.log_info(format!("Selected DHCP {}", name));
+                    }
+                }
+                Protocol::Kerberos => {
+                    let types = [10u8, 12];
+                    if let Some(t) = types.get(app.scan_type_index) {
+                        app.kerberos_type = *t;
+                        let name = match t { 10 => "AS-REQ", _ => "TGS-REQ" };
+                        app.log_info(format!("Selected Kerberos {}", name));
+                    }
+                }
+                Protocol::Arp => {
+                    let ops = [1u8, 2];
+                    if let Some(op) = ops.get(app.scan_type_index) {
+                        app.arp_operation = *op;
+                        let name = match op { 1 => "Request", _ => "Reply" };
+                        app.log_info(format!("Selected ARP {}", name));
+                    }
+                }
+                Protocol::Ntp | Protocol::Raw => {
+                    // Template selection - just log, templates are used elsewhere
+                    let templates = PacketTemplate::all();
+                    if let Some(tmpl) = templates.get(app.scan_type_index) {
+                        app.log_info(format!("Selected template: {}", tmpl.name()));
+                    }
+                }
             }
         }
         _ => {}

@@ -1,6 +1,6 @@
 //! Packet metadata editor popup
 //!
-//! Provides a popup for editing packet fields like ports, TTL, sequence numbers, etc.
+//! Provides a protocol-aware popup for editing packet fields.
 
 use crate::app::{App, PacketEditorField};
 use ratatui::{
@@ -24,20 +24,24 @@ const WARNING: Color = Color::Rgb(200, 180, 80);
 pub fn render_packet_editor(frame: &mut Frame, app: &App) {
     let area = frame.area();
 
-    // Calculate popup size (60% width, 50% height, max 70x20)
+    // Get protocol-specific fields
+    let fields = PacketEditorField::fields_for_protocol(app.selected_protocol);
+    let field_count = fields.len();
+
+    // Calculate popup size based on field count
     let popup_width = (area.width * 60 / 100).min(70).max(50);
-    let popup_height = (area.height * 50 / 100).min(20).max(14);
+    let popup_height = ((field_count as u16 + 6).max(10)).min(area.height * 70 / 100);
 
     let popup_area = centered_rect(popup_width, popup_height, area);
 
     // Clear background
     frame.render_widget(Clear, popup_area);
 
-    // Create main block
+    // Create main block with protocol in title
     let title = if app.packet_editor.editing {
-        format!(" Packet Editor - Editing {} ", app.packet_editor.current_field.label())
+        format!(" {} Packet - Editing {} ", app.selected_protocol, app.packet_editor.current_field.label())
     } else {
-        " Packet Editor ".to_string()
+        format!(" {} Packet Editor ", app.selected_protocol)
     };
 
     let block = Block::default()
@@ -57,31 +61,61 @@ pub fn render_packet_editor(frame: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(8),    // Fields
+            Constraint::Min(4),    // Fields
             Constraint::Length(1), // Spacer
             Constraint::Length(2), // Help text
         ])
         .split(inner);
 
-    // Render fields
-    render_fields(frame, app, chunks[0]);
+    // Render protocol-specific fields
+    render_fields(frame, app, chunks[0], &fields);
 
     // Render help text
     render_help_text(frame, app, chunks[2]);
 }
 
-/// Render the editable fields
-fn render_fields(frame: &mut Frame, app: &App, area: Rect) {
-    let fields = [
-        PacketEditorField::SourcePort,
-        PacketEditorField::DestPort,
-        PacketEditorField::Ttl,
-        PacketEditorField::SeqNum,
-        PacketEditorField::AckNum,
-        PacketEditorField::WindowSize,
-        PacketEditorField::Payload,
-    ];
+/// Get display value for a field
+fn get_field_value(app: &App, field: &PacketEditorField) -> String {
+    match field {
+        PacketEditorField::SourcePort => app.packet_editor.source_port.to_string(),
+        PacketEditorField::DestPort => app.packet_editor.dest_port.to_string(),
+        PacketEditorField::Ttl => app.packet_editor.ttl.to_string(),
+        PacketEditorField::Payload => {
+            if app.packet_editor.payload_hex.is_empty() {
+                "(empty)".to_string()
+            } else {
+                format_hex_preview(&app.packet_editor.payload_hex, 20)
+            }
+        }
+        PacketEditorField::SeqNum => app.packet_editor.seq_num.to_string(),
+        PacketEditorField::AckNum => app.packet_editor.ack_num.to_string(),
+        PacketEditorField::WindowSize => app.packet_editor.window_size.to_string(),
+        PacketEditorField::IcmpType => format!("{} ({})", app.packet_editor.icmp_type, icmp_type_name(app.packet_editor.icmp_type)),
+        PacketEditorField::IcmpCode => app.packet_editor.icmp_code.to_string(),
+        PacketEditorField::IcmpId => app.packet_editor.icmp_id.to_string(),
+        PacketEditorField::IcmpSeq => app.packet_editor.icmp_seq.to_string(),
+        PacketEditorField::DnsQueryType => format!("{} ({})", app.packet_editor.dns_query_type, dns_type_name(app.packet_editor.dns_query_type)),
+        PacketEditorField::DnsDomain => if app.packet_editor.dns_domain.is_empty() { "(target host)".to_string() } else { app.packet_editor.dns_domain.clone() },
+        PacketEditorField::HttpMethod => app.packet_editor.http_method.clone(),
+        PacketEditorField::HttpPath => app.packet_editor.http_path.clone(),
+        PacketEditorField::HttpHeaders => if app.packet_editor.http_headers.is_empty() { "(default)".to_string() } else { format!("{} bytes", app.packet_editor.http_headers.len()) },
+        PacketEditorField::SnmpVersion => format!("v{}", if app.packet_editor.snmp_version == 2 { "2c".to_string() } else { app.packet_editor.snmp_version.to_string() }),
+        PacketEditorField::SnmpCommunity => app.packet_editor.snmp_community.clone(),
+        PacketEditorField::SsdpTarget => app.packet_editor.ssdp_target.clone(),
+        PacketEditorField::SmbVersion => format!("SMB{}", app.packet_editor.smb_version),
+        PacketEditorField::LdapScope => format!("{} ({})", app.packet_editor.ldap_scope, ldap_scope_name(app.packet_editor.ldap_scope)),
+        PacketEditorField::LdapBaseDn => if app.packet_editor.ldap_base_dn.is_empty() { "(empty)".to_string() } else { app.packet_editor.ldap_base_dn.clone() },
+        PacketEditorField::NetBiosName => if app.packet_editor.netbios_name.is_empty() { "(broadcast)".to_string() } else { app.packet_editor.netbios_name.clone() },
+        PacketEditorField::DhcpType => format!("{} ({})", app.packet_editor.dhcp_type, dhcp_type_name(app.packet_editor.dhcp_type)),
+        PacketEditorField::KerberosRealm => if app.packet_editor.kerberos_realm.is_empty() { "(required)".to_string() } else { app.packet_editor.kerberos_realm.clone() },
+        PacketEditorField::KerberosUser => if app.packet_editor.kerberos_user.is_empty() { "(required)".to_string() } else { app.packet_editor.kerberos_user.clone() },
+        PacketEditorField::ArpOperation => format!("{} ({})", app.packet_editor.arp_operation, if app.packet_editor.arp_operation == 1 { "Request" } else { "Reply" }),
+        PacketEditorField::ArpTargetIp => if app.packet_editor.arp_target_ip.is_empty() { "(target host)".to_string() } else { app.packet_editor.arp_target_ip.clone() },
+    }
+}
 
+/// Render the editable fields (protocol-aware)
+fn render_fields(frame: &mut Frame, app: &App, area: Rect, fields: &[PacketEditorField]) {
     let rows: Vec<Row> = fields.iter().map(|field| {
         let is_selected = *field == app.packet_editor.current_field;
         let is_editing = is_selected && app.packet_editor.editing;
@@ -95,21 +129,7 @@ fn render_fields(frame: &mut Frame, app: &App, area: Rect) {
         let value = if is_editing {
             format!("{}▌", app.packet_editor.field_buffer)
         } else {
-            match field {
-                PacketEditorField::SourcePort => app.packet_editor.source_port.to_string(),
-                PacketEditorField::DestPort => app.packet_editor.dest_port.to_string(),
-                PacketEditorField::Ttl => app.packet_editor.ttl.to_string(),
-                PacketEditorField::SeqNum => app.packet_editor.seq_num.to_string(),
-                PacketEditorField::AckNum => app.packet_editor.ack_num.to_string(),
-                PacketEditorField::WindowSize => app.packet_editor.window_size.to_string(),
-                PacketEditorField::Payload => {
-                    if app.packet_editor.payload_hex.is_empty() {
-                        "(empty)".to_string()
-                    } else {
-                        format_hex_preview(&app.packet_editor.payload_hex, 20)
-                    }
-                }
-            }
+            get_field_value(app, field)
         };
 
         let value_style = if is_editing {
@@ -145,6 +165,51 @@ fn render_fields(frame: &mut Frame, app: &App, area: Rect) {
     .column_spacing(1);
 
     frame.render_widget(table, area);
+}
+
+fn icmp_type_name(t: u8) -> &'static str {
+    match t {
+        0 => "Echo Reply",
+        3 => "Dest Unreachable",
+        8 => "Echo Request",
+        11 => "Time Exceeded",
+        13 => "Timestamp",
+        _ => "Other",
+    }
+}
+
+fn dns_type_name(t: u16) -> &'static str {
+    match t {
+        1 => "A",
+        2 => "NS",
+        5 => "CNAME",
+        15 => "MX",
+        16 => "TXT",
+        28 => "AAAA",
+        _ => "Other",
+    }
+}
+
+fn ldap_scope_name(s: u8) -> &'static str {
+    match s {
+        0 => "Base",
+        1 => "One Level",
+        2 => "Subtree",
+        _ => "Unknown",
+    }
+}
+
+fn dhcp_type_name(t: u8) -> &'static str {
+    match t {
+        1 => "Discover",
+        2 => "Offer",
+        3 => "Request",
+        4 => "Decline",
+        5 => "ACK",
+        6 => "NAK",
+        7 => "Release",
+        _ => "Other",
+    }
 }
 
 /// Render help text at the bottom

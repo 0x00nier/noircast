@@ -242,67 +242,259 @@ impl std::fmt::Display for JobStatus {
     }
 }
 
-/// Packet editor field being edited
+/// Packet editor field being edited - protocol-aware
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PacketEditorField {
+    // Common fields
     #[default]
     SourcePort,
     DestPort,
     Ttl,
+    Payload,
+
+    // TCP-specific
     SeqNum,
     AckNum,
     WindowSize,
-    Payload,
+
+    // ICMP-specific
+    IcmpType,
+    IcmpCode,
+    IcmpId,
+    IcmpSeq,
+
+    // DNS-specific
+    DnsQueryType,
+    DnsDomain,
+
+    // HTTP-specific
+    HttpMethod,
+    HttpPath,
+    HttpHeaders,
+
+    // SNMP-specific
+    SnmpVersion,
+    SnmpCommunity,
+
+    // SSDP-specific
+    SsdpTarget,
+
+    // SMB-specific
+    SmbVersion,
+
+    // LDAP-specific
+    LdapScope,
+    LdapBaseDn,
+
+    // NetBIOS-specific
+    NetBiosName,
+
+    // DHCP-specific
+    DhcpType,
+
+    // Kerberos-specific
+    KerberosRealm,
+    KerberosUser,
+
+    // ARP-specific
+    ArpOperation,
+    ArpTargetIp,
 }
 
 impl PacketEditorField {
-    pub fn next(&self) -> Self {
-        match self {
-            PacketEditorField::SourcePort => PacketEditorField::DestPort,
-            PacketEditorField::DestPort => PacketEditorField::Ttl,
-            PacketEditorField::Ttl => PacketEditorField::SeqNum,
-            PacketEditorField::SeqNum => PacketEditorField::AckNum,
-            PacketEditorField::AckNum => PacketEditorField::WindowSize,
-            PacketEditorField::WindowSize => PacketEditorField::Payload,
-            PacketEditorField::Payload => PacketEditorField::SourcePort,
+    /// Get fields relevant for a specific protocol
+    pub fn fields_for_protocol(protocol: Protocol) -> Vec<Self> {
+        match protocol {
+            Protocol::Tcp => vec![
+                Self::SourcePort, Self::DestPort, Self::Ttl,
+                Self::SeqNum, Self::AckNum, Self::WindowSize, Self::Payload,
+            ],
+            Protocol::Udp => vec![
+                Self::SourcePort, Self::DestPort, Self::Ttl, Self::Payload,
+            ],
+            Protocol::Icmp => vec![
+                Self::IcmpType, Self::IcmpCode, Self::IcmpId, Self::IcmpSeq,
+                Self::Ttl, Self::Payload,
+            ],
+            Protocol::Dns => vec![
+                Self::DnsQueryType, Self::DnsDomain, Self::DestPort, Self::Payload,
+            ],
+            Protocol::Http | Protocol::Https => vec![
+                Self::HttpMethod, Self::HttpPath, Self::HttpHeaders, Self::DestPort,
+            ],
+            Protocol::Ntp => vec![
+                Self::DestPort, Self::Payload,
+            ],
+            Protocol::Snmp => vec![
+                Self::SnmpVersion, Self::SnmpCommunity, Self::DestPort,
+            ],
+            Protocol::Ssdp => vec![
+                Self::SsdpTarget, Self::Payload,
+            ],
+            Protocol::Smb => vec![
+                Self::SmbVersion, Self::DestPort,
+            ],
+            Protocol::Ldap => vec![
+                Self::LdapScope, Self::LdapBaseDn, Self::DestPort,
+            ],
+            Protocol::NetBios => vec![
+                Self::NetBiosName, Self::DestPort,
+            ],
+            Protocol::Dhcp => vec![
+                Self::DhcpType,
+            ],
+            Protocol::Kerberos => vec![
+                Self::KerberosRealm, Self::KerberosUser, Self::DestPort,
+            ],
+            Protocol::Arp => vec![
+                Self::ArpOperation, Self::ArpTargetIp,
+            ],
+            Protocol::Raw => vec![
+                Self::SourcePort, Self::DestPort, Self::Ttl, Self::Payload,
+            ],
         }
     }
 
-    pub fn prev(&self) -> Self {
-        match self {
-            PacketEditorField::SourcePort => PacketEditorField::Payload,
-            PacketEditorField::DestPort => PacketEditorField::SourcePort,
-            PacketEditorField::Ttl => PacketEditorField::DestPort,
-            PacketEditorField::SeqNum => PacketEditorField::Ttl,
-            PacketEditorField::AckNum => PacketEditorField::SeqNum,
-            PacketEditorField::WindowSize => PacketEditorField::AckNum,
-            PacketEditorField::Payload => PacketEditorField::WindowSize,
+    /// Get next field for a given protocol context
+    pub fn next_for_protocol(&self, protocol: Protocol) -> Self {
+        let fields = Self::fields_for_protocol(protocol);
+        if let Some(idx) = fields.iter().position(|f| f == self) {
+            fields[(idx + 1) % fields.len()]
+        } else {
+            fields.first().copied().unwrap_or_default()
         }
+    }
+
+    /// Get previous field for a given protocol context
+    pub fn prev_for_protocol(&self, protocol: Protocol) -> Self {
+        let fields = Self::fields_for_protocol(protocol);
+        if let Some(idx) = fields.iter().position(|f| f == self) {
+            if idx == 0 {
+                fields[fields.len() - 1]
+            } else {
+                fields[idx - 1]
+            }
+        } else {
+            fields.first().copied().unwrap_or_default()
+        }
+    }
+
+    /// Legacy next/prev for backwards compatibility (used in tests)
+    #[cfg(test)]
+    pub fn next(&self) -> Self {
+        self.next_for_protocol(Protocol::Tcp)
+    }
+
+    #[cfg(test)]
+    pub fn prev(&self) -> Self {
+        self.prev_for_protocol(Protocol::Tcp)
     }
 
     pub fn label(&self) -> &'static str {
         match self {
+            // Common
             PacketEditorField::SourcePort => "Source Port",
             PacketEditorField::DestPort => "Dest Port",
             PacketEditorField::Ttl => "TTL",
+            PacketEditorField::Payload => "Payload (hex)",
+            // TCP
             PacketEditorField::SeqNum => "Sequence #",
             PacketEditorField::AckNum => "Ack #",
             PacketEditorField::WindowSize => "Window Size",
-            PacketEditorField::Payload => "Payload (hex)",
+            // ICMP
+            PacketEditorField::IcmpType => "ICMP Type",
+            PacketEditorField::IcmpCode => "ICMP Code",
+            PacketEditorField::IcmpId => "ICMP ID",
+            PacketEditorField::IcmpSeq => "ICMP Seq",
+            // DNS
+            PacketEditorField::DnsQueryType => "Query Type",
+            PacketEditorField::DnsDomain => "Domain",
+            // HTTP
+            PacketEditorField::HttpMethod => "Method",
+            PacketEditorField::HttpPath => "Path",
+            PacketEditorField::HttpHeaders => "Headers",
+            // SNMP
+            PacketEditorField::SnmpVersion => "Version",
+            PacketEditorField::SnmpCommunity => "Community",
+            // SSDP
+            PacketEditorField::SsdpTarget => "Search Target",
+            // SMB
+            PacketEditorField::SmbVersion => "SMB Version",
+            // LDAP
+            PacketEditorField::LdapScope => "Scope",
+            PacketEditorField::LdapBaseDn => "Base DN",
+            // NetBIOS
+            PacketEditorField::NetBiosName => "Name",
+            // DHCP
+            PacketEditorField::DhcpType => "Message Type",
+            // Kerberos
+            PacketEditorField::KerberosRealm => "Realm",
+            PacketEditorField::KerberosUser => "Username",
+            // ARP
+            PacketEditorField::ArpOperation => "Operation",
+            PacketEditorField::ArpTargetIp => "Target IP",
         }
     }
 }
 
-/// State for the packet editor popup
+/// State for the packet editor popup - protocol-aware
 #[derive(Debug, Clone, Default)]
 pub struct PacketEditorState {
+    // Common fields
     pub source_port: u16,
     pub dest_port: u16,
     pub ttl: u8,
+    pub payload_hex: String,
+
+    // TCP-specific
     pub seq_num: u32,
     pub ack_num: u32,
     pub window_size: u16,
-    pub payload_hex: String,
+
+    // ICMP-specific
+    pub icmp_type: u8,
+    pub icmp_code: u8,
+    pub icmp_id: u16,
+    pub icmp_seq: u16,
+
+    // DNS-specific
+    pub dns_query_type: u16,
+    pub dns_domain: String,
+
+    // HTTP-specific
+    pub http_method: String,
+    pub http_path: String,
+    pub http_headers: String,
+
+    // SNMP-specific
+    pub snmp_version: u8,
+    pub snmp_community: String,
+
+    // SSDP-specific
+    pub ssdp_target: String,
+
+    // SMB-specific
+    pub smb_version: u8,
+
+    // LDAP-specific
+    pub ldap_scope: u8,
+    pub ldap_base_dn: String,
+
+    // NetBIOS-specific
+    pub netbios_name: String,
+
+    // DHCP-specific
+    pub dhcp_type: u8,
+
+    // Kerberos-specific
+    pub kerberos_realm: String,
+    pub kerberos_user: String,
+
+    // ARP-specific
+    pub arp_operation: u8,
+    pub arp_target_ip: String,
+
+    // Editor state
     pub current_field: PacketEditorField,
     pub field_buffer: String,
     pub editing: bool,
@@ -311,17 +503,44 @@ pub struct PacketEditorState {
 impl PacketEditorState {
     pub fn new() -> Self {
         Self {
-            source_port: rand::random::<u16>() | 0x8000, // Random high port
+            source_port: rand::random::<u16>() | 0x8000,
             dest_port: 80,
             ttl: 64,
+            payload_hex: String::new(),
             seq_num: rand::random(),
             ack_num: 0,
             window_size: 65535,
-            payload_hex: String::new(),
+            icmp_type: 8,
+            icmp_code: 0,
+            icmp_id: rand::random(),
+            icmp_seq: 1,
+            dns_query_type: 1,
+            dns_domain: String::new(),
+            http_method: "GET".to_string(),
+            http_path: "/".to_string(),
+            http_headers: String::new(),
+            snmp_version: 2,
+            snmp_community: "public".to_string(),
+            ssdp_target: "ssdp:all".to_string(),
+            smb_version: 2,
+            ldap_scope: 2,
+            ldap_base_dn: String::new(),
+            netbios_name: String::new(),
+            dhcp_type: 1,
+            kerberos_realm: String::new(),
+            kerberos_user: String::new(),
+            arp_operation: 1,
+            arp_target_ip: String::new(),
             current_field: PacketEditorField::default(),
             field_buffer: String::new(),
             editing: false,
         }
+    }
+
+    /// Reset field to first field for given protocol
+    pub fn reset_to_protocol(&mut self, protocol: Protocol) {
+        let fields = PacketEditorField::fields_for_protocol(protocol);
+        self.current_field = fields.first().copied().unwrap_or_default();
     }
 
     pub fn get_current_value(&self) -> String {
@@ -329,36 +548,41 @@ impl PacketEditorState {
             PacketEditorField::SourcePort => self.source_port.to_string(),
             PacketEditorField::DestPort => self.dest_port.to_string(),
             PacketEditorField::Ttl => self.ttl.to_string(),
+            PacketEditorField::Payload => self.payload_hex.clone(),
             PacketEditorField::SeqNum => self.seq_num.to_string(),
             PacketEditorField::AckNum => self.ack_num.to_string(),
             PacketEditorField::WindowSize => self.window_size.to_string(),
-            PacketEditorField::Payload => self.payload_hex.clone(),
+            PacketEditorField::IcmpType => self.icmp_type.to_string(),
+            PacketEditorField::IcmpCode => self.icmp_code.to_string(),
+            PacketEditorField::IcmpId => self.icmp_id.to_string(),
+            PacketEditorField::IcmpSeq => self.icmp_seq.to_string(),
+            PacketEditorField::DnsQueryType => self.dns_query_type.to_string(),
+            PacketEditorField::DnsDomain => self.dns_domain.clone(),
+            PacketEditorField::HttpMethod => self.http_method.clone(),
+            PacketEditorField::HttpPath => self.http_path.clone(),
+            PacketEditorField::HttpHeaders => self.http_headers.clone(),
+            PacketEditorField::SnmpVersion => self.snmp_version.to_string(),
+            PacketEditorField::SnmpCommunity => self.snmp_community.clone(),
+            PacketEditorField::SsdpTarget => self.ssdp_target.clone(),
+            PacketEditorField::SmbVersion => self.smb_version.to_string(),
+            PacketEditorField::LdapScope => self.ldap_scope.to_string(),
+            PacketEditorField::LdapBaseDn => self.ldap_base_dn.clone(),
+            PacketEditorField::NetBiosName => self.netbios_name.clone(),
+            PacketEditorField::DhcpType => self.dhcp_type.to_string(),
+            PacketEditorField::KerberosRealm => self.kerberos_realm.clone(),
+            PacketEditorField::KerberosUser => self.kerberos_user.clone(),
+            PacketEditorField::ArpOperation => self.arp_operation.to_string(),
+            PacketEditorField::ArpTargetIp => self.arp_target_ip.clone(),
         }
     }
 
     pub fn apply_buffer(&mut self) -> bool {
-        let value = &self.field_buffer;
+        let value = self.field_buffer.clone();
         match self.current_field {
-            PacketEditorField::SourcePort => {
-                if let Ok(v) = value.parse() { self.source_port = v; true } else { false }
-            }
-            PacketEditorField::DestPort => {
-                if let Ok(v) = value.parse() { self.dest_port = v; true } else { false }
-            }
-            PacketEditorField::Ttl => {
-                if let Ok(v) = value.parse() { self.ttl = v; true } else { false }
-            }
-            PacketEditorField::SeqNum => {
-                if let Ok(v) = value.parse() { self.seq_num = v; true } else { false }
-            }
-            PacketEditorField::AckNum => {
-                if let Ok(v) = value.parse() { self.ack_num = v; true } else { false }
-            }
-            PacketEditorField::WindowSize => {
-                if let Ok(v) = value.parse() { self.window_size = v; true } else { false }
-            }
+            PacketEditorField::SourcePort => value.parse().map(|v| self.source_port = v).is_ok(),
+            PacketEditorField::DestPort => value.parse().map(|v| self.dest_port = v).is_ok(),
+            PacketEditorField::Ttl => value.parse().map(|v| self.ttl = v).is_ok(),
             PacketEditorField::Payload => {
-                // Validate hex string (pairs of hex digits)
                 let cleaned: String = value.chars().filter(|c| c.is_ascii_hexdigit()).collect();
                 if cleaned.len() % 2 == 0 {
                     self.payload_hex = cleaned;
@@ -367,6 +591,30 @@ impl PacketEditorState {
                     false
                 }
             }
+            PacketEditorField::SeqNum => value.parse().map(|v| self.seq_num = v).is_ok(),
+            PacketEditorField::AckNum => value.parse().map(|v| self.ack_num = v).is_ok(),
+            PacketEditorField::WindowSize => value.parse().map(|v| self.window_size = v).is_ok(),
+            PacketEditorField::IcmpType => value.parse().map(|v| self.icmp_type = v).is_ok(),
+            PacketEditorField::IcmpCode => value.parse().map(|v| self.icmp_code = v).is_ok(),
+            PacketEditorField::IcmpId => value.parse().map(|v| self.icmp_id = v).is_ok(),
+            PacketEditorField::IcmpSeq => value.parse().map(|v| self.icmp_seq = v).is_ok(),
+            PacketEditorField::DnsQueryType => value.parse().map(|v| self.dns_query_type = v).is_ok(),
+            PacketEditorField::DnsDomain => { self.dns_domain = value; true }
+            PacketEditorField::HttpMethod => { self.http_method = value; true }
+            PacketEditorField::HttpPath => { self.http_path = value; true }
+            PacketEditorField::HttpHeaders => { self.http_headers = value; true }
+            PacketEditorField::SnmpVersion => value.parse().map(|v| self.snmp_version = v).is_ok(),
+            PacketEditorField::SnmpCommunity => { self.snmp_community = value; true }
+            PacketEditorField::SsdpTarget => { self.ssdp_target = value; true }
+            PacketEditorField::SmbVersion => value.parse().map(|v| self.smb_version = v).is_ok(),
+            PacketEditorField::LdapScope => value.parse().map(|v| self.ldap_scope = v).is_ok(),
+            PacketEditorField::LdapBaseDn => { self.ldap_base_dn = value; true }
+            PacketEditorField::NetBiosName => { self.netbios_name = value; true }
+            PacketEditorField::DhcpType => value.parse().map(|v| self.dhcp_type = v).is_ok(),
+            PacketEditorField::KerberosRealm => { self.kerberos_realm = value; true }
+            PacketEditorField::KerberosUser => { self.kerberos_user = value; true }
+            PacketEditorField::ArpOperation => value.parse().map(|v| self.arp_operation = v).is_ok(),
+            PacketEditorField::ArpTargetIp => { self.arp_target_ip = value; true }
         }
     }
 
@@ -429,6 +677,31 @@ pub struct App {
     // HTTP-specific options
     pub http_method: String,      // GET, POST, HEAD, etc.
     pub http_path: String,        // Request path
+
+    // SNMP-specific options
+    pub snmp_version: u8,         // 1, 2 (v2c), 3
+    pub snmp_community: String,   // Community string (v1/v2c)
+
+    // SSDP-specific options
+    pub ssdp_target: u8,          // 0=ssdp:all, 1=upnp:rootdevice, 2=custom
+
+    // SMB-specific options
+    pub smb_version: u8,          // 1, 2, 3
+
+    // LDAP-specific options
+    pub ldap_scope: u8,           // 0=base, 1=one, 2=sub
+
+    // NetBIOS-specific options
+    pub netbios_type: u8,         // 0=name query, 1=node status
+
+    // DHCP-specific options
+    pub dhcp_type: u8,            // 1=Discover, 3=Request, 7=Release
+
+    // Kerberos-specific options
+    pub kerberos_type: u8,        // 10=AS-REQ, 12=TGS-REQ
+
+    // ARP-specific options
+    pub arp_operation: u8,        // 1=Request, 2=Reply
 
     // Target configuration
     pub target: Target,
@@ -542,6 +815,31 @@ impl App {
             // HTTP defaults
             http_method: "GET".to_string(),
             http_path: "/".to_string(),
+
+            // SNMP defaults
+            snmp_version: 2,  // v2c
+            snmp_community: "public".to_string(),
+
+            // SSDP defaults
+            ssdp_target: 0,  // ssdp:all
+
+            // SMB defaults
+            smb_version: 2,  // SMB2
+
+            // LDAP defaults
+            ldap_scope: 2,  // subtree
+
+            // NetBIOS defaults
+            netbios_type: 0,  // name query
+
+            // DHCP defaults
+            dhcp_type: 1,  // Discover
+
+            // Kerberos defaults
+            kerberos_type: 10,  // AS-REQ
+
+            // ARP defaults
+            arp_operation: 1,  // Request
 
             target: Target::default(),
             target_input_field: TargetField::Host,
@@ -738,8 +1036,14 @@ impl App {
             Protocol::Dns => 6, // DNS query types
             Protocol::Http | Protocol::Https => 6, // HTTP methods
             Protocol::Ntp | Protocol::Raw => PacketTemplate::all().len(),
-            Protocol::Snmp | Protocol::Ssdp | Protocol::Smb | Protocol::Ldap |
-            Protocol::NetBios | Protocol::Dhcp | Protocol::Kerberos | Protocol::Arp => 1,
+            Protocol::Snmp => 3, // v1, v2c, v3
+            Protocol::Ssdp => 3, // ssdp:all, upnp:rootdevice, custom
+            Protocol::Smb => 3, // SMB1, SMB2, SMB3
+            Protocol::Ldap => 3, // base, one, sub
+            Protocol::NetBios => 2, // name query, node status
+            Protocol::Dhcp => 3, // Discover, Request, Release
+            Protocol::Kerberos => 2, // AS-REQ, TGS-REQ
+            Protocol::Arp => 2, // Request, Reply
         }
     }
 
@@ -1224,5 +1528,149 @@ mod tests {
         let bytes = state.to_payload_bytes().unwrap();
         assert_eq!(bytes, vec![0x48, 0x65, 0x6C, 0x6C, 0x6F]);
         assert_eq!(String::from_utf8(bytes).unwrap(), "Hello");
+    }
+
+    #[test]
+    fn test_packet_editor_fields_for_protocol() {
+        // TCP should have 7 fields
+        let tcp_fields = PacketEditorField::fields_for_protocol(Protocol::Tcp);
+        assert_eq!(tcp_fields.len(), 7);
+        assert!(tcp_fields.contains(&PacketEditorField::SeqNum));
+        assert!(tcp_fields.contains(&PacketEditorField::WindowSize));
+
+        // UDP should have fewer fields (no TCP-specific ones)
+        let udp_fields = PacketEditorField::fields_for_protocol(Protocol::Udp);
+        assert_eq!(udp_fields.len(), 4);
+        assert!(!udp_fields.contains(&PacketEditorField::SeqNum));
+
+        // ICMP should have ICMP-specific fields
+        let icmp_fields = PacketEditorField::fields_for_protocol(Protocol::Icmp);
+        assert!(icmp_fields.contains(&PacketEditorField::IcmpType));
+        assert!(icmp_fields.contains(&PacketEditorField::IcmpCode));
+
+        // HTTP should have HTTP-specific fields
+        let http_fields = PacketEditorField::fields_for_protocol(Protocol::Http);
+        assert!(http_fields.contains(&PacketEditorField::HttpMethod));
+        assert!(http_fields.contains(&PacketEditorField::HttpPath));
+
+        // DNS should have DNS-specific fields
+        let dns_fields = PacketEditorField::fields_for_protocol(Protocol::Dns);
+        assert!(dns_fields.contains(&PacketEditorField::DnsQueryType));
+        assert!(dns_fields.contains(&PacketEditorField::DnsDomain));
+    }
+
+    #[test]
+    fn test_packet_editor_protocol_navigation() {
+        // Test navigation within TCP protocol
+        let first = PacketEditorField::fields_for_protocol(Protocol::Tcp)[0];
+        let second = first.next_for_protocol(Protocol::Tcp);
+        assert_ne!(first, second);
+
+        // Navigation should wrap around
+        let tcp_fields = PacketEditorField::fields_for_protocol(Protocol::Tcp);
+        let last = tcp_fields[tcp_fields.len() - 1];
+        let wrapped = last.next_for_protocol(Protocol::Tcp);
+        assert_eq!(wrapped, tcp_fields[0]);
+
+        // Test prev navigation
+        let first = tcp_fields[0];
+        let prev_from_first = first.prev_for_protocol(Protocol::Tcp);
+        assert_eq!(prev_from_first, tcp_fields[tcp_fields.len() - 1]);
+    }
+
+    #[test]
+    fn test_packet_editor_reset_to_protocol() {
+        let mut state = PacketEditorState::new();
+
+        // Set current field to something for TCP
+        state.current_field = PacketEditorField::SeqNum;
+
+        // Reset to ICMP should set first ICMP field
+        state.reset_to_protocol(Protocol::Icmp);
+        let icmp_first = PacketEditorField::fields_for_protocol(Protocol::Icmp)[0];
+        assert_eq!(state.current_field, icmp_first);
+
+        // Reset to HTTP should set first HTTP field
+        state.reset_to_protocol(Protocol::Http);
+        let http_first = PacketEditorField::fields_for_protocol(Protocol::Http)[0];
+        assert_eq!(state.current_field, http_first);
+    }
+
+    #[test]
+    fn test_packet_editor_protocol_specific_values() {
+        let mut state = PacketEditorState::new();
+
+        // Test ICMP fields
+        state.current_field = PacketEditorField::IcmpType;
+        state.field_buffer = "8".to_string();
+        assert!(state.apply_buffer());
+        assert_eq!(state.icmp_type, 8);
+
+        // Test DNS fields
+        state.current_field = PacketEditorField::DnsDomain;
+        state.field_buffer = "example.com".to_string();
+        assert!(state.apply_buffer());
+        assert_eq!(state.dns_domain, "example.com");
+
+        // Test HTTP fields
+        state.current_field = PacketEditorField::HttpMethod;
+        state.field_buffer = "POST".to_string();
+        assert!(state.apply_buffer());
+        assert_eq!(state.http_method, "POST");
+
+        // Test SNMP fields
+        state.current_field = PacketEditorField::SnmpCommunity;
+        state.field_buffer = "private".to_string();
+        assert!(state.apply_buffer());
+        assert_eq!(state.snmp_community, "private");
+    }
+
+    #[test]
+    fn test_protocol_config_counts() {
+        let args = create_test_args();
+        let mut app = App::new(args).unwrap();
+
+        // TCP should have 8 scan types (9 total minus UDP)
+        app.selected_protocol = Protocol::Tcp;
+        assert_eq!(app.get_filtered_scan_types_count(), 8);
+
+        // UDP should have 1 scan type
+        app.selected_protocol = Protocol::Udp;
+        assert_eq!(app.get_filtered_scan_types_count(), 1);
+
+        // ICMP should have 5 types
+        app.selected_protocol = Protocol::Icmp;
+        assert_eq!(app.get_filtered_scan_types_count(), 5);
+
+        // DNS should have 6 query types
+        app.selected_protocol = Protocol::Dns;
+        assert_eq!(app.get_filtered_scan_types_count(), 6);
+
+        // SNMP should have 3 versions
+        app.selected_protocol = Protocol::Snmp;
+        assert_eq!(app.get_filtered_scan_types_count(), 3);
+
+        // ARP should have 2 operations
+        app.selected_protocol = Protocol::Arp;
+        assert_eq!(app.get_filtered_scan_types_count(), 2);
+    }
+
+    #[test]
+    fn test_packet_editor_field_labels() {
+        // All fields should have non-empty labels
+        let all_fields = [
+            PacketEditorField::SourcePort, PacketEditorField::DestPort,
+            PacketEditorField::Ttl, PacketEditorField::Payload,
+            PacketEditorField::SeqNum, PacketEditorField::AckNum,
+            PacketEditorField::WindowSize, PacketEditorField::IcmpType,
+            PacketEditorField::IcmpCode, PacketEditorField::IcmpId,
+            PacketEditorField::IcmpSeq, PacketEditorField::DnsQueryType,
+            PacketEditorField::DnsDomain, PacketEditorField::HttpMethod,
+            PacketEditorField::HttpPath, PacketEditorField::HttpHeaders,
+        ];
+
+        for field in &all_fields {
+            assert!(!field.label().is_empty(), "Field {:?} has empty label", field);
+        }
     }
 }
