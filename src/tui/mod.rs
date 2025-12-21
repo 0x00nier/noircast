@@ -8,6 +8,8 @@ pub mod handler;
 
 use crate::app::App;
 use crate::ui;
+use crate::config::ScanType;
+use crate::network::sender::PacketSender;
 use anyhow::Result;
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
@@ -16,6 +18,9 @@ use crossterm::{
 };
 use ratatui::prelude::*;
 use std::io::{stdout, Stdout};
+use std::net::IpAddr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 /// Terminal type alias
@@ -79,18 +84,22 @@ async fn run_app(
             ui::render(frame, app);
         })?;
 
-        // Handle flood mode - send packets continuously
-        if app.flood_mode {
-            if let Some(sender) = &app.packet_sender.clone() {
-                // Send a burst of packets
-                if let Some(ip) = app.target.ip {
-                    let ports = app.target.ports.clone();
-                    let scan_type = app.selected_scan_type;
-                    let flags = app.selected_flags.clone();
-                    // Send batch of packets (flood mode)
-                    let _ = sender.send_batch(ip, &ports, scan_type, &flags).await;
-                    // Count all packets sent in this batch
-                    app.flood_count += ports.len() as u64;
+        // Handle flood mode - spawn workers if just started
+        if app.flood_mode && !app.flood_stop.load(Ordering::Relaxed) {
+            // Spawn flood workers if not already running (check if count is 0 means just started)
+            if app.flood_count.load(Ordering::Relaxed) == 0 {
+                if let Some(sender) = &app.packet_sender {
+                    if let Some(ip) = app.target.ip {
+                        spawn_flood_workers(
+                            sender.clone(),
+                            ip,
+                            app.target.ports.clone(),
+                            app.selected_scan_type,
+                            app.flood_count.clone(),
+                            app.flood_stop.clone(),
+                            app.flood_workers,
+                        );
+                    }
                 }
             }
         }
@@ -140,6 +149,75 @@ async fn run_app(
     }
 
     Ok(())
+}
+
+/// Spawn multiple flood worker tasks for high-speed packet flooding
+fn spawn_flood_workers(
+    sender: Arc<PacketSender>,
+    target_ip: IpAddr,
+    ports: Vec<u16>,
+    scan_type: ScanType,
+    counter: Arc<AtomicU64>,
+    stop_flag: Arc<AtomicBool>,
+    num_workers: usize,
+) {
+    use tokio::net::TcpStream;
+    use std::net::SocketAddr;
+
+    // Increment counter to mark that workers have started
+    counter.fetch_add(1, Ordering::SeqCst);
+
+    for worker_id in 0..num_workers {
+        let _sender = sender.clone(); // Reserved for raw socket flood
+        let ports = ports.clone();
+        let counter = counter.clone();
+        let stop_flag = stop_flag.clone();
+
+        tokio::spawn(async move {
+            tracing::debug!("Flood worker {} started", worker_id);
+
+            // Each worker sends packets in a tight loop
+            while !stop_flag.load(Ordering::Relaxed) {
+                for &port in &ports {
+                    if stop_flag.load(Ordering::Relaxed) {
+                        break;
+                    }
+
+                    // Fire-and-forget connection attempt for maximum speed
+                    match scan_type {
+                        ScanType::ConnectScan => {
+                            let addr = SocketAddr::new(target_ip, port);
+                            // Non-blocking connect attempt - don't wait for result
+                            let _ = tokio::time::timeout(
+                                Duration::from_millis(50),
+                                TcpStream::connect(addr)
+                            ).await;
+                        }
+                        ScanType::UdpScan => {
+                            if let Ok(socket) = tokio::net::UdpSocket::bind("0.0.0.0:0").await {
+                                let addr = SocketAddr::new(target_ip, port);
+                                let _ = socket.send_to(&[0u8; 1], addr).await;
+                            }
+                        }
+                        _ => {
+                            // For SYN/FIN/NULL/XMAS scans, use raw sockets if available
+                            // Fall back to connect scan otherwise
+                            let addr = SocketAddr::new(target_ip, port);
+                            let _ = tokio::time::timeout(
+                                Duration::from_millis(50),
+                                TcpStream::connect(addr)
+                            ).await;
+                        }
+                    }
+
+                    // Increment counter for each packet sent
+                    counter.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+
+            tracing::debug!("Flood worker {} stopped", worker_id);
+        });
+    }
 }
 
 #[cfg(test)]

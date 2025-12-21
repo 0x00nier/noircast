@@ -8,6 +8,7 @@ use anyhow::Result;
 use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::RwLock;
 
 /// Direction of captured packet
@@ -747,9 +748,11 @@ pub struct App {
 
     // Flood mode (like hping3 --flood)
     pub flood_mode: bool,
-    pub flood_count: u64,       // packets sent in flood mode
-    pub flood_rate: u64,        // target packets per second (0 = unlimited)
+    pub flood_count: Arc<AtomicU64>,  // atomic counter for multithreaded flood
+    pub flood_rate: u64,              // target packets per second (0 = unlimited)
     pub flood_start: Option<std::time::Instant>,
+    pub flood_stop: Arc<AtomicBool>,  // signal to stop flood workers
+    pub flood_workers: usize,         // number of concurrent flood workers
 
     // Multi-session support (Space+n to create new session)
     pub sessions: Vec<Session>,
@@ -875,9 +878,11 @@ impl App {
             status_time: std::time::Instant::now(),
 
             flood_mode: false,
-            flood_count: 0,
+            flood_count: Arc::new(AtomicU64::new(0)),
             flood_rate: 0,  // unlimited by default
             flood_start: None,
+            flood_stop: Arc::new(AtomicBool::new(false)),
+            flood_workers: 8,  // default 8 concurrent workers
 
             // Session management
             sessions: vec![Session::new(0)],
@@ -1279,48 +1284,46 @@ impl App {
     /// Start flood mode (like hping3 --flood)
     pub fn start_flood(&mut self) {
         self.flood_mode = true;
-        self.flood_count = 0;
+        self.flood_count.store(0, Ordering::SeqCst);
+        self.flood_stop.store(false, Ordering::SeqCst);
         self.flood_start = Some(std::time::Instant::now());
-        self.log_warning("FLOOD MODE STARTED - Press 'q' to stop");
+        self.log_warning(format!("FLOOD MODE STARTED ({} workers) - Press 'q' to stop", self.flood_workers));
     }
 
     /// Stop flood mode
     pub fn stop_flood(&mut self) {
         if self.flood_mode {
+            self.flood_stop.store(true, Ordering::SeqCst);
             self.flood_mode = false;
+            let count = self.flood_count.load(Ordering::SeqCst);
             let duration = self.flood_start
                 .map(|s| s.elapsed().as_secs_f64())
                 .unwrap_or(0.0);
             let rate = if duration > 0.0 {
-                self.flood_count as f64 / duration
+                count as f64 / duration
             } else {
                 0.0
             };
             self.log_success(format!(
                 "FLOOD STOPPED: {} packets in {:.2}s ({:.0} pps)",
-                self.flood_count, duration, rate
+                count, duration, rate
             ));
             self.flood_start = None;
         }
     }
 
-    /// Increment flood counter
-    #[allow(dead_code)]
-    pub fn increment_flood_count(&mut self) {
-        self.flood_count += 1;
-    }
-
     /// Get flood stats for display
     pub fn get_flood_stats(&self) -> (u64, f64, f64) {
+        let count = self.flood_count.load(Ordering::Relaxed);
         let duration = self.flood_start
             .map(|s| s.elapsed().as_secs_f64())
             .unwrap_or(0.0);
         let rate = if duration > 0.0 {
-            self.flood_count as f64 / duration
+            count as f64 / duration
         } else {
             0.0
         };
-        (self.flood_count, duration, rate)
+        (count, duration, rate)
     }
 
     /// Quit the application
