@@ -94,10 +94,14 @@ async fn run_app(
                             sender.clone(),
                             ip,
                             app.target.ports.clone(),
+                            app.selected_protocol,
                             app.selected_scan_type,
                             app.flood_count.clone(),
                             app.flood_stop.clone(),
                             app.flood_workers,
+                            app.target.host.clone(),
+                            app.http_method.clone(),
+                            app.http_path.clone(),
                         );
                     }
                 }
@@ -153,28 +157,37 @@ async fn run_app(
 
 /// Spawn multiple flood worker tasks for high-speed packet flooding
 fn spawn_flood_workers(
-    sender: Arc<PacketSender>,
+    _sender: Arc<PacketSender>,
     target_ip: IpAddr,
     ports: Vec<u16>,
-    scan_type: ScanType,
+    protocol: crate::config::Protocol,
+    _scan_type: ScanType,
     counter: Arc<AtomicU64>,
     stop_flag: Arc<AtomicBool>,
     num_workers: usize,
+    host: String,
+    http_method: String,
+    http_path: String,
 ) {
     use tokio::net::TcpStream;
+    use tokio::io::AsyncWriteExt;
     use std::net::SocketAddr;
+    use crate::config::Protocol;
+    use crate::network::protocols::*;
 
     // Increment counter to mark that workers have started
     counter.fetch_add(1, Ordering::SeqCst);
 
     for worker_id in 0..num_workers {
-        let _sender = sender.clone(); // Reserved for raw socket flood
         let ports = ports.clone();
         let counter = counter.clone();
         let stop_flag = stop_flag.clone();
+        let host = host.clone();
+        let http_method = http_method.clone();
+        let http_path = http_path.clone();
 
         tokio::spawn(async move {
-            tracing::debug!("Flood worker {} started", worker_id);
+            tracing::debug!("Flood worker {} started for {:?}", worker_id, protocol);
 
             // Each worker sends packets in a tight loop
             while !stop_flag.load(Ordering::Relaxed) {
@@ -183,26 +196,117 @@ fn spawn_flood_workers(
                         break;
                     }
 
-                    // Fire-and-forget connection attempt for maximum speed
-                    match scan_type {
-                        ScanType::ConnectScan => {
-                            let addr = SocketAddr::new(target_ip, port);
-                            // Non-blocking connect attempt - don't wait for result
+                    let addr = SocketAddr::new(target_ip, port);
+
+                    match protocol {
+                        Protocol::Http | Protocol::Https => {
+                            // Send actual HTTP request
+                            if let Ok(Ok(mut stream)) = tokio::time::timeout(
+                                Duration::from_millis(100),
+                                TcpStream::connect(addr)
+                            ).await {
+                                let request = format!(
+                                    "{} {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: NoirCast/0.1.0\r\nConnection: close\r\n\r\n",
+                                    http_method, http_path, host
+                                );
+                                let _ = stream.write_all(request.as_bytes()).await;
+                            }
+                        }
+                        Protocol::Tcp => {
+                            // TCP connect flood
                             let _ = tokio::time::timeout(
                                 Duration::from_millis(50),
                                 TcpStream::connect(addr)
                             ).await;
                         }
-                        ScanType::UdpScan => {
+                        Protocol::Udp => {
+                            // UDP packet flood
                             if let Ok(socket) = tokio::net::UdpSocket::bind("0.0.0.0:0").await {
-                                let addr = SocketAddr::new(target_ip, port);
-                                let _ = socket.send_to(&[0u8; 1], addr).await;
+                                let _ = socket.send_to(&[0u8; 64], addr).await;
                             }
                         }
-                        _ => {
-                            // For SYN/FIN/NULL/XMAS scans, use raw sockets if available
-                            // Fall back to connect scan otherwise
-                            let addr = SocketAddr::new(target_ip, port);
+                        Protocol::Dns => {
+                            // DNS query flood
+                            if let Ok(socket) = tokio::net::UdpSocket::bind("0.0.0.0:0").await {
+                                let query = DnsQuery::a_query(&host);
+                                let _ = socket.send_to(&query.build(), addr).await;
+                            }
+                        }
+                        Protocol::Ntp => {
+                            // NTP request flood
+                            if let Ok(socket) = tokio::net::UdpSocket::bind("0.0.0.0:0").await {
+                                let ntp = NtpPacket::new();
+                                let _ = socket.send_to(&ntp.build(), addr).await;
+                            }
+                        }
+                        Protocol::Snmp => {
+                            // SNMP request flood
+                            if let Ok(socket) = tokio::net::UdpSocket::bind("0.0.0.0:0").await {
+                                let snmp = SnmpGetRequest::new("public").add_oid("1.3.6.1.2.1.1.1.0");
+                                let _ = socket.send_to(&snmp.build(), addr).await;
+                            }
+                        }
+                        Protocol::Ssdp => {
+                            // SSDP M-SEARCH flood
+                            if let Ok(socket) = tokio::net::UdpSocket::bind("0.0.0.0:0").await {
+                                let ssdp = SsdpRequest::m_search();
+                                let _ = socket.send_to(&ssdp.build(), addr).await;
+                            }
+                        }
+                        Protocol::NetBios => {
+                            // NetBIOS name query flood
+                            if let Ok(socket) = tokio::net::UdpSocket::bind("0.0.0.0:0").await {
+                                let nb = NetBiosNsPacket::node_status_query("*");
+                                let _ = socket.send_to(&nb.build(), addr).await;
+                            }
+                        }
+                        Protocol::Dhcp => {
+                            // DHCP discover flood
+                            if let Ok(socket) = tokio::net::UdpSocket::bind("0.0.0.0:0").await {
+                                let mac = [0x00, 0x11, 0x22, 0x33, 0x44, rand::random::<u8>()];
+                                let dhcp = DhcpDiscoverPacket::new(mac);
+                                let _ = socket.send_to(&dhcp.build(), addr).await;
+                            }
+                        }
+                        Protocol::Smb => {
+                            // SMB negotiate flood
+                            if let Ok(Ok(mut stream)) = tokio::time::timeout(
+                                Duration::from_millis(100),
+                                TcpStream::connect(addr)
+                            ).await {
+                                let smb = SmbNegotiatePacket::new();
+                                let _ = stream.write_all(&smb.build()).await;
+                            }
+                        }
+                        Protocol::Ldap => {
+                            // LDAP search flood
+                            if let Ok(Ok(mut stream)) = tokio::time::timeout(
+                                Duration::from_millis(100),
+                                TcpStream::connect(addr)
+                            ).await {
+                                let ldap = LdapSearchRequest::rootdse_query();
+                                let _ = stream.write_all(&ldap.build()).await;
+                            }
+                        }
+                        Protocol::Kerberos => {
+                            // Kerberos AS-REQ flood
+                            if let Ok(Ok(mut stream)) = tokio::time::timeout(
+                                Duration::from_millis(100),
+                                TcpStream::connect(addr)
+                            ).await {
+                                let krb = KerberosAsReq::new("REALM", "user");
+                                let _ = stream.write_all(&krb.build()).await;
+                            }
+                        }
+                        Protocol::Icmp | Protocol::Arp => {
+                            // ICMP and ARP require raw sockets - fall back to TCP connect
+                            let _ = tokio::time::timeout(
+                                Duration::from_millis(50),
+                                TcpStream::connect(addr)
+                            ).await;
+                        }
+                        Protocol::Raw => {
+                            // Raw mode: send empty TCP connections
                             let _ = tokio::time::timeout(
                                 Duration::from_millis(50),
                                 TcpStream::connect(addr)

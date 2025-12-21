@@ -364,8 +364,8 @@ pub struct Target {
 impl Default for Target {
     fn default() -> Self {
         Self {
-            host: String::new(),
-            ip: None,
+            host: "127.0.0.1".to_string(),
+            ip: Some(std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1))),
             ports: vec![80],
         }
     }
