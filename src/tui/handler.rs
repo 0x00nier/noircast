@@ -2068,14 +2068,22 @@ async fn execute_command(app: &mut App, command: &str) {
             if app.flood_mode {
                 app.stop_flood();
             } else {
-                // Parse optional rate limit: :flood [rate]
-                let rate = if parts.len() > 1 {
-                    parts[1].parse::<u64>().unwrap_or(0)
-                } else {
-                    0 // unlimited
-                };
-                app.flood_rate = rate;
-                app.start_flood();
+                // Resolve the host IP first
+                match crate::network::sender::PacketSender::resolve_host(&app.target.host).await {
+                    Ok(ip) => {
+                        app.target.ip = Some(ip);
+                        // Parse optional worker count: :flood [workers]
+                        if parts.len() > 1 {
+                            if let Ok(workers) = parts[1].parse::<usize>() {
+                                app.flood_workers = workers.max(1).min(64); // 1-64 workers
+                            }
+                        }
+                        app.start_flood();
+                    }
+                    Err(e) => {
+                        app.log_error(format!("Failed to resolve host: {}", e));
+                    }
+                }
             }
         }
         "stop" => {

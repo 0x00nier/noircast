@@ -749,7 +749,6 @@ pub struct App {
     // Flood mode (like hping3 --flood)
     pub flood_mode: bool,
     pub flood_count: Arc<AtomicU64>,  // atomic counter for multithreaded flood
-    pub flood_rate: u64,              // target packets per second (0 = unlimited)
     pub flood_start: Option<std::time::Instant>,
     pub flood_stop: Arc<AtomicBool>,  // signal to stop flood workers
     pub flood_workers: usize,         // number of concurrent flood workers
@@ -879,7 +878,6 @@ impl App {
 
             flood_mode: false,
             flood_count: Arc::new(AtomicU64::new(0)),
-            flood_rate: 0,  // unlimited by default
             flood_start: None,
             flood_stop: Arc::new(AtomicBool::new(false)),
             flood_workers: 8,  // default 8 concurrent workers
