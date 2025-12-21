@@ -8,7 +8,7 @@ mod protocol_picker;
 pub mod widgets;
 
 use crate::app::{ActivePane, App, HttpDirection, InputMode, LogLevel, PacketDirection};
-use widgets::{ProgressIndicator, StatusBadge, BadgeStyle, KeyValue, Card, MiniChart};
+use widgets::{StatusBadge, BadgeStyle};
 use crate::config::{PacketTemplate, Protocol, ScanType, TcpFlag};
 use crate::network::packet::format_flags;
 use crate::network::protocols::get_service_name;
@@ -967,15 +967,6 @@ fn render_packet_capture(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(block, area);
 
     if app.captured_packets.is_empty() {
-        // Use StatusBadge convenience methods to show status
-        let _badge_info = StatusBadge::info("No Data");
-        let _badge_success = StatusBadge::success("Ready");
-        let _badge_warning = StatusBadge::warning("Waiting");
-        let _badge_error = StatusBadge::error("Empty");
-
-        // Use BadgeStyle::Error
-        let _error_style = BadgeStyle::Error;
-
         let empty = Paragraph::new(Line::from(vec![Span::styled(
             "No packets captured yet. Press 's' to send packets.",
             Style::default().fg(FG_DIM),
@@ -1145,23 +1136,18 @@ fn render_http_stream(frame: &mut Frame, app: &App, area: Rect) {
 /// Render statistics pane
 fn render_statistics(frame: &mut Frame, app: &App, area: Rect) {
     let is_active = app.active_pane == ActivePane::Statistics;
-
-    // Use Card widget for statistics display
-    let content = vec![
-        Line::from("Packet Statistics"),
-    ];
-    let card = Card::new("Statistics")
-        .content(content)
-        .border_color(if is_active { ACCENT } else { FG_DIM })
-        .active(is_active);
-    // Note: We render the card just to use it, but we'll use our custom layout below
-    let _ = card; // Acknowledge the card was used
-
     let border_color = if is_active { BORDER_ACTIVE } else { BORDER_INACTIVE };
 
+    // Show flood indicator in title when active
+    let title = if app.flood_mode {
+        " Statistics [FLOOD] "
+    } else {
+        " Statistics "
+    };
+
     let block = Block::default()
-        .title(" Statistics ")
-        .title_style(Style::default().fg(if is_active { ACCENT } else { FG_PRIMARY }))
+        .title(title)
+        .title_style(Style::default().fg(if app.flood_mode { WARNING } else if is_active { ACCENT } else { FG_PRIMARY }))
         .borders(Borders::ALL)
         .border_type(if is_active { BorderType::Double } else { BorderType::Rounded })
         .border_style(Style::default().fg(border_color))
@@ -1175,40 +1161,88 @@ fn render_statistics(frame: &mut Frame, app: &App, area: Rect) {
         .map(|s| s.clone())
         .unwrap_or_default();
 
-    // Split inner area for stats, progress indicator, and mini chart
-    let stats_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(5), Constraint::Length(1), Constraint::Length(1)])
-        .split(inner);
+    // Build stats lines
+    let mut lines: Vec<Line> = Vec::new();
 
-    // Use KeyValue widget for stats display
-    let kv = KeyValue::new()
-        .add("Sent", stats.packets_sent.to_string())
-        .add_colored("Received", stats.packets_received.to_string(), SUCCESS)
-        .add_colored("Failed", stats.packets_failed.to_string(), ERROR)
-        .add_colored("Open", stats.open_ports.to_string(), SUCCESS)
-        .add_colored("Closed", stats.closed_ports.to_string(), WARNING)
-        .add("Avg RTT", format!("{:.2} ms", stats.avg_rtt_ms));
-    frame.render_widget(kv, stats_chunks[0]);
+    // Regular packet stats
+    lines.push(Line::from(vec![
+        Span::styled("Sent     ", Style::default().fg(FG_SECONDARY)),
+        Span::styled(": ", Style::default().fg(FG_DIM)),
+        Span::styled(stats.packets_sent.to_string(), Style::default().fg(FG_PRIMARY)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("Received ", Style::default().fg(FG_SECONDARY)),
+        Span::styled(": ", Style::default().fg(FG_DIM)),
+        Span::styled(stats.packets_received.to_string(), Style::default().fg(SUCCESS)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("Failed   ", Style::default().fg(FG_SECONDARY)),
+        Span::styled(": ", Style::default().fg(FG_DIM)),
+        Span::styled(stats.packets_failed.to_string(), Style::default().fg(if stats.packets_failed > 0 { ERROR } else { FG_PRIMARY })),
+    ]));
 
-    // Use ProgressIndicator for success rate with show_percentage
+    // Flood mode stats
+    if app.flood_mode {
+        let (flood_count, flood_duration, flood_pps) = app.get_flood_stats();
+        lines.push(Line::from(vec![
+            Span::styled("Flood    ", Style::default().fg(WARNING)),
+            Span::styled(": ", Style::default().fg(FG_DIM)),
+            Span::styled(format_count(flood_count), Style::default().fg(WARNING).add_modifier(Modifier::BOLD)),
+            Span::styled(" pkts", Style::default().fg(FG_DIM)),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("Rate     ", Style::default().fg(WARNING)),
+            Span::styled(": ", Style::default().fg(FG_DIM)),
+            Span::styled(format!("{:.0}", flood_pps), Style::default().fg(ACCENT_BRIGHT).add_modifier(Modifier::BOLD)),
+            Span::styled(" pps  ", Style::default().fg(FG_DIM)),
+            Span::styled(format!("{:.1}s", flood_duration), Style::default().fg(FG_SECONDARY)),
+        ]));
+    } else {
+        // Show port stats when not flooding
+        lines.push(Line::from(vec![
+            Span::styled("Open     ", Style::default().fg(FG_SECONDARY)),
+            Span::styled(": ", Style::default().fg(FG_DIM)),
+            Span::styled(stats.open_ports.to_string(), Style::default().fg(SUCCESS)),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("Closed   ", Style::default().fg(FG_SECONDARY)),
+            Span::styled(": ", Style::default().fg(FG_DIM)),
+            Span::styled(stats.closed_ports.to_string(), Style::default().fg(WARNING)),
+        ]));
+    }
+
+    // RTT stats
+    lines.push(Line::from(vec![
+        Span::styled("Avg RTT  ", Style::default().fg(FG_SECONDARY)),
+        Span::styled(": ", Style::default().fg(FG_DIM)),
+        Span::styled(format!("{:.2} ms", stats.avg_rtt_ms), Style::default().fg(INFO)),
+    ]));
+
+    // Success rate as text (cleaner than progress bar)
     let total = stats.packets_sent.max(1) as f64;
     let success_rate = stats.packets_received as f64 / total;
-    let progress = ProgressIndicator::new("Rate:", success_rate)
-        .color(if success_rate > 0.8 { SUCCESS } else if success_rate > 0.5 { WARNING } else { ERROR })
-        .show_percentage(true);
-    frame.render_widget(progress, stats_chunks[1]);
+    let rate_color = if success_rate > 0.8 { SUCCESS } else if success_rate > 0.5 { WARNING } else { ERROR };
+    let rate_pct = format!("{:3.0}%", success_rate * 100.0);
 
-    // Use MiniChart for packet history visualization
-    let history_data: Vec<f64> = (0..20).map(|i| {
-        // Simple mock data based on stats - in real use, you'd track history
-        let base = stats.packets_sent as f64;
-        (base * (1.0 + (i as f64 * 0.1).sin() * 0.3)).max(0.0)
-    }).collect();
-    let chart = MiniChart::new(&history_data)
-        .color(ACCENT)
-        .max(history_data.iter().cloned().fold(f64::MIN, f64::max).max(1.0));
-    frame.render_widget(chart, stats_chunks[2]);
+    lines.push(Line::from(vec![
+        Span::styled("Rate     ", Style::default().fg(FG_SECONDARY)),
+        Span::styled(": ", Style::default().fg(FG_DIM)),
+        Span::styled(&rate_pct, Style::default().fg(rate_color).add_modifier(Modifier::BOLD)),
+    ]));
+
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(paragraph, inner);
+}
+
+/// Format large numbers with K/M suffixes for compact display
+fn format_count(n: u64) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 1_000 {
+        format!("{:.1}K", n as f64 / 1_000.0)
+    } else {
+        n.to_string()
+    }
 }
 
 /// Render status bar
