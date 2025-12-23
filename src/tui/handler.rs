@@ -118,32 +118,68 @@ fn handle_packet_editor_keys(app: &mut App, key: KeyEvent) {
             _ => {}
         }
     } else {
-        // Navigation mode
+        // Navigation mode with filter support
+        use crate::ui::packet_editor::filter_fields;
+
+        // Get filtered fields for navigation
+        let all_fields = PacketEditorField::fields_for_protocol_context(
+            app.selected_protocol,
+            &app.packet_editor.http_method,
+        );
+        let filtered_fields = filter_fields(&all_fields, &app.packet_editor_filter);
+
         match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => {
-                // Apply changes before closing
+            KeyCode::Esc => {
+                if !app.packet_editor_filter.is_empty() {
+                    // Clear filter first
+                    app.packet_editor_filter.clear();
+                } else {
+                    // Apply changes and close
+                    app.apply_packet_editor_changes();
+                    app.show_packet_editor = false;
+                    app.packet_editor_filter.clear();
+                    app.log_info("Packet editor closed - changes applied");
+                }
+            }
+            KeyCode::Char('q') => {
+                // Close without clearing filter
                 app.apply_packet_editor_changes();
                 app.show_packet_editor = false;
+                app.packet_editor_filter.clear();
                 app.log_info("Packet editor closed - changes applied");
             }
             KeyCode::Char('j') | KeyCode::Down => {
-                // Context-aware navigation (shows body/cookies for POST)
-                app.packet_editor.current_field = app.packet_editor.current_field.next_for_context(
-                    app.selected_protocol,
-                    &app.packet_editor.http_method,
-                );
+                // Navigate within filtered fields
+                if !filtered_fields.is_empty() {
+                    let current_idx = filtered_fields
+                        .iter()
+                        .position(|f| *f == app.packet_editor.current_field)
+                        .unwrap_or(0);
+                    let next_idx = (current_idx + 1) % filtered_fields.len();
+                    app.packet_editor.current_field = filtered_fields[next_idx];
+                }
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                // Context-aware navigation (shows body/cookies for POST)
-                app.packet_editor.current_field = app.packet_editor.current_field.prev_for_context(
-                    app.selected_protocol,
-                    &app.packet_editor.http_method,
-                );
+                // Navigate within filtered fields
+                if !filtered_fields.is_empty() {
+                    let current_idx = filtered_fields
+                        .iter()
+                        .position(|f| *f == app.packet_editor.current_field)
+                        .unwrap_or(0);
+                    let prev_idx = if current_idx == 0 {
+                        filtered_fields.len() - 1
+                    } else {
+                        current_idx - 1
+                    };
+                    app.packet_editor.current_field = filtered_fields[prev_idx];
+                }
             }
             KeyCode::Enter | KeyCode::Char('i') => {
-                // Start editing current field
-                app.packet_editor.editing = true;
-                app.packet_editor.field_buffer = app.packet_editor.get_current_value();
+                // Start editing current field (only if visible in filter)
+                if filtered_fields.contains(&app.packet_editor.current_field) {
+                    app.packet_editor.editing = true;
+                    app.packet_editor.field_buffer = app.packet_editor.get_current_value();
+                }
             }
             KeyCode::Char('r') => {
                 // Randomize current field
@@ -178,6 +214,24 @@ fn handle_packet_editor_keys(app: &mut App, key: KeyEvent) {
                 if app.packet_editor.current_field == PacketEditorField::Payload {
                     app.packet_editor.payload_hex.clear();
                     app.log_info("Payload cleared");
+                }
+            }
+            KeyCode::Backspace => {
+                // Clear filter character
+                app.packet_editor_filter.pop();
+                // Reset selection to first filtered field if current not in filter
+                let filtered = filter_fields(&all_fields, &app.packet_editor_filter);
+                if !filtered.is_empty() && !filtered.contains(&app.packet_editor.current_field) {
+                    app.packet_editor.current_field = filtered[0];
+                }
+            }
+            KeyCode::Char(c) if c.is_alphanumeric() && !matches!(c, 'j' | 'k' | 'i' | 'r' | 'c' | 'q') => {
+                // Add to filter (exclude navigation/action keys)
+                app.packet_editor_filter.push(c);
+                // Reset selection to first filtered field
+                let filtered = filter_fields(&all_fields, &app.packet_editor_filter);
+                if !filtered.is_empty() {
+                    app.packet_editor.current_field = filtered[0];
                 }
             }
             _ => {}
@@ -333,13 +387,14 @@ fn get_filtered_templates(filter: &str) -> Vec<PacketTemplate> {
 
 /// Handle theme picker keys
 fn handle_theme_picker_keys(app: &mut App, key: KeyEvent) {
-    use crate::ui::theme::ThemeType;
+    use crate::ui::theme_picker::filter_themes;
 
-    let themes = ThemeType::all();
+    let themes = filter_themes(&app.theme_picker_filter);
 
     match key.code {
         KeyCode::Esc | KeyCode::Char('q') => {
             app.show_theme_picker = false;
+            app.theme_picker_filter.clear();
             app.theme_picker_index = 0;
         }
         KeyCode::Char('j') | KeyCode::Down => {
@@ -367,9 +422,20 @@ fn handle_theme_picker_keys(app: &mut App, key: KeyEvent) {
             if let Some(theme) = themes.get(app.theme_picker_index) {
                 app.current_theme = *theme;
                 app.show_theme_picker = false;
+                app.theme_picker_filter.clear();
                 app.theme_picker_index = 0;
                 app.log_success(format!("Theme set to {}", theme.name()));
             }
+        }
+        KeyCode::Backspace => {
+            app.theme_picker_filter.pop();
+            // Reset index if filter changes
+            app.theme_picker_index = 0;
+        }
+        KeyCode::Char(c) if c.is_alphanumeric() => {
+            app.theme_picker_filter.push(c);
+            // Reset index when filter changes
+            app.theme_picker_index = 0;
         }
         _ => {}
     }

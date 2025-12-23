@@ -1,6 +1,6 @@
 //! Packet metadata editor popup
 //!
-//! Provides a protocol-aware popup for editing packet fields.
+//! Provides a protocol-aware popup for editing packet fields with search/filter.
 
 use crate::app::{App, PacketEditorField};
 use ratatui::{
@@ -11,16 +11,34 @@ use ratatui::{
     Frame,
 };
 
+/// Filter fields by search query (matches label)
+pub fn filter_fields(fields: &[PacketEditorField], query: &str) -> Vec<PacketEditorField> {
+    if query.is_empty() {
+        return fields.to_vec();
+    }
+    let query_lower = query.to_lowercase();
+    fields
+        .iter()
+        .filter(|f| {
+            let label = f.label().to_lowercase();
+            label.contains(&query_lower)
+        })
+        .cloned()
+        .collect()
+}
+
 /// Render the packet editor popup
 pub fn render_packet_editor(frame: &mut Frame, app: &App) {
     let colors = app.current_theme.colors();
     let area = frame.area();
 
     // Get protocol-specific fields with context (e.g., POST shows body/cookies)
-    let fields = PacketEditorField::fields_for_protocol_context(
+    let all_fields = PacketEditorField::fields_for_protocol_context(
         app.selected_protocol,
         &app.packet_editor.http_method,
     );
+    // Apply filter if active
+    let fields = filter_fields(&all_fields, &app.packet_editor_filter);
     let field_count = fields.len();
 
     // Calculate popup size based on field count
@@ -32,9 +50,11 @@ pub fn render_packet_editor(frame: &mut Frame, app: &App) {
     // Clear background
     frame.render_widget(Clear, popup_area);
 
-    // Create main block with protocol in title
+    // Create main block with protocol in title, show filter if active
     let title = if app.packet_editor.editing {
         format!(" {} Packet - Editing {} ", app.selected_protocol, app.packet_editor.current_field.label())
+    } else if !app.packet_editor_filter.is_empty() {
+        format!(" {} Packet Editor [{}] ", app.selected_protocol, app.packet_editor_filter)
     } else {
         format!(" {} Packet Editor ", app.selected_protocol)
     };
@@ -321,8 +341,8 @@ fn render_help_text(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled(" navigate  ", Style::default().fg(colors.fg_dim)),
             Span::styled("Enter/i", Style::default().fg(colors.accent)),
             Span::styled(" edit  ", Style::default().fg(colors.fg_dim)),
-            Span::styled("r", Style::default().fg(colors.accent)),
-            Span::styled(" randomize  ", Style::default().fg(colors.fg_dim)),
+            Span::styled("Type", Style::default().fg(colors.accent)),
+            Span::styled(" filter  ", Style::default().fg(colors.fg_dim)),
             Span::styled("Esc/q", Style::default().fg(colors.accent)),
             Span::styled(" close", Style::default().fg(colors.fg_dim)),
         ])
@@ -364,6 +384,7 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Protocol;
 
     #[test]
     fn test_format_hex_preview_short() {
@@ -387,5 +408,76 @@ mod tests {
         assert_eq!(centered.y, 15);
         assert_eq!(centered.width, 40);
         assert_eq!(centered.height, 20);
+    }
+
+    #[test]
+    fn test_filter_fields_empty_query() {
+        let fields = PacketEditorField::fields_for_protocol(Protocol::Tcp);
+        let filtered = filter_fields(&fields, "");
+        assert_eq!(filtered.len(), fields.len());
+    }
+
+    #[test]
+    fn test_filter_fields_by_label() {
+        let fields = PacketEditorField::fields_for_protocol(Protocol::Tcp);
+
+        // Filter for "port" should match Source Port and Dest Port
+        let port_fields = filter_fields(&fields, "port");
+        assert!(port_fields.contains(&PacketEditorField::SourcePort));
+        assert!(port_fields.contains(&PacketEditorField::DestPort));
+        assert!(!port_fields.contains(&PacketEditorField::Ttl));
+
+        // Filter for "tcp" should match TCP Flags
+        let tcp_fields = filter_fields(&fields, "tcp");
+        assert!(tcp_fields.contains(&PacketEditorField::TcpFlags));
+
+        // Filter for "seq" should match Sequence #
+        let seq_fields = filter_fields(&fields, "seq");
+        assert!(seq_fields.contains(&PacketEditorField::SeqNum));
+    }
+
+    #[test]
+    fn test_filter_fields_case_insensitive() {
+        let fields = PacketEditorField::fields_for_protocol(Protocol::Tcp);
+
+        let upper = filter_fields(&fields, "TTL");
+        let lower = filter_fields(&fields, "ttl");
+        let mixed = filter_fields(&fields, "TtL");
+
+        assert_eq!(upper.len(), lower.len());
+        assert_eq!(lower.len(), mixed.len());
+        assert!(upper.contains(&PacketEditorField::Ttl));
+    }
+
+    #[test]
+    fn test_filter_fields_no_match() {
+        let fields = PacketEditorField::fields_for_protocol(Protocol::Tcp);
+        let filtered = filter_fields(&fields, "zzzznonexistent");
+        assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn test_filter_fields_icmp() {
+        let fields = PacketEditorField::fields_for_protocol(Protocol::Icmp);
+
+        // Filter for "icmp" should match all ICMP-specific fields
+        let icmp_filtered = filter_fields(&fields, "icmp");
+        assert!(icmp_filtered.contains(&PacketEditorField::IcmpType));
+        assert!(icmp_filtered.contains(&PacketEditorField::IcmpCode));
+        assert!(icmp_filtered.contains(&PacketEditorField::IcmpId));
+        assert!(icmp_filtered.contains(&PacketEditorField::IcmpSeq));
+    }
+
+    #[test]
+    fn test_filter_fields_http() {
+        let fields = PacketEditorField::fields_for_protocol(Protocol::Http);
+
+        // Filter for "method" should match HTTP Method
+        let method_fields = filter_fields(&fields, "method");
+        assert!(method_fields.contains(&PacketEditorField::HttpMethod));
+
+        // Filter for "path" should match HTTP Path
+        let path_fields = filter_fields(&fields, "path");
+        assert!(path_fields.contains(&PacketEditorField::HttpPath));
     }
 }

@@ -3,12 +3,12 @@
 //! Provides all the visual components using Ratatui
 
 mod help;
-mod packet_editor;
+pub mod packet_editor;
 mod protocol_picker;
 mod repeater;
 mod template_picker;
 pub mod theme;
-mod theme_picker;
+pub mod theme_picker;
 pub mod widgets;
 
 use crate::app::{ActivePane, App, HttpDirection, InputMode, LogLevel, PacketDirection};

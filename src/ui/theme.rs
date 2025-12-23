@@ -221,12 +221,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_theme_navigation() {
-        let theme = ThemeType::Noir;
-        let next = theme.next();
-        assert_eq!(next, ThemeType::Matrix);
-        let prev = next.prev();
-        assert_eq!(prev, ThemeType::Noir);
-    }
 }

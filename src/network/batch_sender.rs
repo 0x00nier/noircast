@@ -534,4 +534,174 @@ mod tests {
         assert!(socket.local_addr().is_ok());
         pool.release(socket);
     }
+
+    #[test]
+    fn test_buffer_pool_exhaustion_and_creation() {
+        // Start with small pool
+        let pool = BufferPool::new(2, 512);
+
+        // Acquire more than initial count
+        let b1 = pool.acquire();
+        let b2 = pool.acquire();
+        let b3 = pool.acquire(); // Should create new buffer
+
+        let (acquired, _, created) = pool.stats();
+        assert_eq!(acquired, 3);
+        assert_eq!(created, 3); // 2 initial + 1 new
+
+        pool.release(b1);
+        pool.release(b2);
+        pool.release(b3);
+    }
+
+    #[test]
+    fn test_packet_buffer_reset() {
+        let mut buf = PacketBuffer::new(100);
+        buf.buffer()[0..10].copy_from_slice(b"0123456789");
+        buf.set_len(10);
+        assert_eq!(buf.as_slice().len(), 10);
+
+        buf.reset();
+        assert_eq!(buf.as_slice().len(), 0);
+    }
+
+    #[test]
+    fn test_packet_buffer_set_len_clamped() {
+        let mut buf = PacketBuffer::new(50);
+        buf.set_len(100); // Larger than capacity
+        assert_eq!(buf.as_slice().len(), 50); // Clamped to capacity
+    }
+
+    #[test]
+    fn test_packet_buffer_mut_slice() {
+        let mut buf = PacketBuffer::new(100);
+        buf.set_len(5);
+        let slice = buf.as_mut_slice();
+        slice[0] = 0xAA;
+        slice[4] = 0xBB;
+        assert_eq!(buf.as_slice()[0], 0xAA);
+        assert_eq!(buf.as_slice()[4], 0xBB);
+    }
+
+    #[test]
+    fn test_batch_send_result_pps() {
+        let result = BatchSendResult {
+            sent: 1000,
+            received: 950,
+            failed: 50,
+            duration: Duration::from_secs(1),
+            avg_rtt_ms: 5.0,
+        };
+        assert_eq!(result.packets_per_second(), 1000.0);
+
+        // Test with fractional duration
+        let result2 = BatchSendResult {
+            sent: 500,
+            received: 450,
+            failed: 50,
+            duration: Duration::from_millis(500),
+            avg_rtt_ms: 2.5,
+        };
+        assert_eq!(result2.packets_per_second(), 1000.0);
+    }
+
+    #[test]
+    fn test_batch_send_result_zero_duration() {
+        let result = BatchSendResult {
+            sent: 100,
+            received: 100,
+            failed: 0,
+            duration: Duration::ZERO,
+            avg_rtt_ms: 0.0,
+        };
+        assert_eq!(result.packets_per_second(), 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_udp_socket_pool_reuse() {
+        let pool = UdpSocketPool::new(3);
+
+        // Acquire and release a socket
+        let socket1 = pool.acquire().await.unwrap();
+        let addr1 = socket1.local_addr().unwrap();
+        pool.release(socket1);
+
+        // Re-acquire - should get same socket from pool
+        let socket2 = pool.acquire().await.unwrap();
+        let addr2 = socket2.local_addr().unwrap();
+
+        // Same socket should have same local address
+        assert_eq!(addr1, addr2);
+    }
+
+    #[tokio::test]
+    async fn test_udp_socket_pool_multiple() {
+        let pool = UdpSocketPool::new(5);
+
+        // Acquire multiple sockets concurrently
+        let s1 = pool.acquire().await.unwrap();
+        let s2 = pool.acquire().await.unwrap();
+        let s3 = pool.acquire().await.unwrap();
+
+        // All should have different local addresses
+        let a1 = s1.local_addr().unwrap();
+        let a2 = s2.local_addr().unwrap();
+        let a3 = s3.local_addr().unwrap();
+
+        assert_ne!(a1, a2);
+        assert_ne!(a2, a3);
+        assert_ne!(a1, a3);
+
+        pool.release(s1);
+        pool.release(s2);
+        pool.release(s3);
+    }
+
+    #[test]
+    fn test_batch_sender_creation() {
+        let sender = BatchSender::new(10, 4096, 1000);
+        assert_eq!(sender.concurrency, 10);
+        assert_eq!(sender.timeout_ms, 1000);
+    }
+
+    #[test]
+    fn test_buffer_pool_stats_accuracy() {
+        let pool = BufferPool::new(5, 256);
+
+        // Multiple acquire/release cycles
+        for _ in 0..10 {
+            let buf = pool.acquire();
+            pool.release(buf);
+        }
+
+        let (acquired, released, created) = pool.stats();
+        assert_eq!(acquired, 10);
+        assert_eq!(released, 10);
+        assert_eq!(created, 5); // Only initial buffers created
+    }
+
+    #[test]
+    fn test_packet_buffer_zero_length() {
+        let buf = PacketBuffer::new(100);
+        assert_eq!(buf.as_slice().len(), 0);
+        assert_eq!(buf.len, 0);
+    }
+
+    #[test]
+    fn test_batch_send_result_clone() {
+        let result = BatchSendResult {
+            sent: 100,
+            received: 90,
+            failed: 10,
+            duration: Duration::from_millis(500),
+            avg_rtt_ms: 3.5,
+        };
+
+        let cloned = result.clone();
+        assert_eq!(result.sent, cloned.sent);
+        assert_eq!(result.received, cloned.received);
+        assert_eq!(result.failed, cloned.failed);
+        assert_eq!(result.duration, cloned.duration);
+        assert_eq!(result.avg_rtt_ms, cloned.avg_rtt_ms);
+    }
 }

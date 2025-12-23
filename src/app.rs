@@ -500,6 +500,7 @@ impl PacketEditorField {
     }
 
     /// Get next field for a given protocol context with HTTP method awareness
+    #[allow(dead_code)]
     pub fn next_for_context(&self, protocol: Protocol, http_method: &str) -> Self {
         let fields = Self::fields_for_protocol_context(protocol, http_method);
         if let Some(idx) = fields.iter().position(|f| f == self) {
@@ -510,6 +511,7 @@ impl PacketEditorField {
     }
 
     /// Get previous field for a given protocol context with HTTP method awareness
+    #[allow(dead_code)]
     pub fn prev_for_context(&self, protocol: Protocol, http_method: &str) -> Self {
         let fields = Self::fields_for_protocol_context(protocol, http_method);
         if let Some(idx) = fields.iter().position(|f| f == self) {
@@ -1561,6 +1563,8 @@ pub struct App {
     // Packet editor popup
     pub show_packet_editor: bool,
     pub packet_editor: PacketEditorState,
+    /// Filter for packet editor field search
+    pub packet_editor_filter: String,
 
     // Protocol picker popup
     pub show_protocol_picker: bool,
@@ -1575,6 +1579,7 @@ pub struct App {
     // Theme picker popup
     pub show_theme_picker: bool,
     pub theme_picker_index: usize,
+    pub theme_picker_filter: String,
     pub current_theme: crate::ui::theme::ThemeType,
 
     // Repeater (BurpSuite-like packet replay)
@@ -1721,6 +1726,7 @@ impl App {
 
             show_packet_editor: false,
             packet_editor: PacketEditorState::new(),
+            packet_editor_filter: String::new(),
 
             show_protocol_picker: false,
             protocol_picker_index: 0,
@@ -1732,6 +1738,7 @@ impl App {
 
             show_theme_picker: false,
             theme_picker_index: 0,
+            theme_picker_filter: String::new(),
             current_theme: crate::ui::theme::ThemeType::default(),
 
             // Repeater - load saved entries
@@ -2628,12 +2635,12 @@ mod tests {
         // Test navigation uses protocol-specific fields
         // For TCP: SourceIp is first, then IpId, etc.
         let tcp_fields = PacketEditorField::fields_for_protocol(Protocol::Tcp);
-        assert_eq!(tcp_fields[0].next_for_protocol(Protocol::Tcp), tcp_fields[1]);
-        assert_eq!(tcp_fields[1].prev_for_protocol(Protocol::Tcp), tcp_fields[0]);
+        assert_eq!(tcp_fields[0].next_for_context(Protocol::Tcp, "GET"), tcp_fields[1]);
+        assert_eq!(tcp_fields[1].prev_for_context(Protocol::Tcp, "GET"), tcp_fields[0]);
 
         // Last field should wrap to first
         let last = tcp_fields.last().unwrap();
-        assert_eq!(last.next_for_protocol(Protocol::Tcp), tcp_fields[0]);
+        assert_eq!(last.next_for_context(Protocol::Tcp, "GET"), tcp_fields[0]);
     }
 
     #[test]
@@ -2720,18 +2727,18 @@ mod tests {
     fn test_packet_editor_protocol_navigation() {
         // Test navigation within TCP protocol
         let first = PacketEditorField::fields_for_protocol(Protocol::Tcp)[0];
-        let second = first.next_for_protocol(Protocol::Tcp);
+        let second = first.next_for_context(Protocol::Tcp, "GET");
         assert_ne!(first, second);
 
         // Navigation should wrap around
         let tcp_fields = PacketEditorField::fields_for_protocol(Protocol::Tcp);
         let last = tcp_fields[tcp_fields.len() - 1];
-        let wrapped = last.next_for_protocol(Protocol::Tcp);
+        let wrapped = last.next_for_context(Protocol::Tcp, "GET");
         assert_eq!(wrapped, tcp_fields[0]);
 
         // Test prev navigation
         let first = tcp_fields[0];
-        let prev_from_first = first.prev_for_protocol(Protocol::Tcp);
+        let prev_from_first = first.prev_for_context(Protocol::Tcp, "GET");
         assert_eq!(prev_from_first, tcp_fields[tcp_fields.len() - 1]);
     }
 
@@ -3008,5 +3015,185 @@ mod tests {
         // Test TCP flags display
         let flags_display = PacketEditorState::format_tcp_flags(state.tcp_flags);
         assert_eq!(flags_display, "SYN");
+    }
+
+    // ==========================================================================
+    // REPEATER TESTS
+    // ==========================================================================
+
+    #[test]
+    fn test_repeater_entry_creation() {
+        let request = RepeaterRequest::Http {
+            method: "GET".to_string(),
+            path: "/api/test".to_string(),
+            headers: std::collections::HashMap::new(),
+            body: None,
+        };
+
+        let entry = RepeaterEntry::new(
+            "Test Entry".to_string(),
+            Protocol::Http,
+            "example.com".to_string(),
+            80,
+            request,
+        );
+
+        assert_eq!(entry.name, "Test Entry");
+        assert_eq!(entry.protocol, Protocol::Http);
+        assert_eq!(entry.target_host, "example.com");
+        assert_eq!(entry.target_port, 80);
+        assert!(entry.response.is_none());
+        assert_eq!(entry.send_count, 0);
+        assert!(!entry.id.is_nil());
+    }
+
+    #[test]
+    fn test_repeater_request_protocol_name() {
+        let http = RepeaterRequest::Http {
+            method: "POST".to_string(),
+            path: "/".to_string(),
+            headers: std::collections::HashMap::new(),
+            body: Some(vec![1, 2, 3]),
+        };
+        assert_eq!(http.protocol_name(), "HTTP");
+
+        let tcp = RepeaterRequest::Tcp {
+            flags: 0x02,
+            seq_num: 1000,
+            ack_num: 0,
+            window_size: 65535,
+            payload: vec![],
+        };
+        assert_eq!(tcp.protocol_name(), "TCP");
+
+        let dns = RepeaterRequest::Dns {
+            query_type: 1,
+            domain: "example.com".to_string(),
+        };
+        assert_eq!(dns.protocol_name(), "DNS");
+
+        let icmp = RepeaterRequest::Icmp {
+            icmp_type: 8,
+            icmp_code: 0,
+            id: 1234,
+            seq: 1,
+        };
+        assert_eq!(icmp.protocol_name(), "ICMP");
+
+        let raw = RepeaterRequest::Raw {
+            data: vec![0xFF; 100],
+        };
+        assert_eq!(raw.protocol_name(), "RAW");
+    }
+
+    #[test]
+    fn test_repeater_request_summary() {
+        let http = RepeaterRequest::Http {
+            method: "GET".to_string(),
+            path: "/api/users".to_string(),
+            headers: std::collections::HashMap::new(),
+            body: None,
+        };
+        assert_eq!(http.summary(), "GET /api/users");
+
+        let tcp = RepeaterRequest::Tcp {
+            flags: 0x02, // SYN
+            seq_num: 0,
+            ack_num: 0,
+            window_size: 65535,
+            payload: vec![],
+        };
+        assert!(tcp.summary().contains("TCP"));
+        assert!(tcp.summary().contains("S")); // SYN flag
+
+        let dns = RepeaterRequest::Dns {
+            query_type: 1,
+            domain: "test.com".to_string(),
+        };
+        assert_eq!(dns.summary(), "DNS 1 test.com");
+
+        let udp = RepeaterRequest::Udp {
+            payload: vec![1, 2, 3, 4, 5],
+        };
+        assert_eq!(udp.summary(), "UDP 5 bytes");
+
+        let raw = RepeaterRequest::Raw {
+            data: vec![0; 50],
+        };
+        assert_eq!(raw.summary(), "RAW 50 bytes");
+    }
+
+    #[test]
+    fn test_repeater_response_status() {
+        // Test all response status variants
+        let success = ResponseStatus::Success;
+        let timeout = ResponseStatus::Timeout;
+        let error = ResponseStatus::Error("Connection refused".to_string());
+
+        // Basic pattern matching should work
+        match success {
+            ResponseStatus::Success => {}
+            _ => panic!("Expected Success"),
+        }
+
+        match timeout {
+            ResponseStatus::Timeout => {}
+            _ => panic!("Expected Timeout"),
+        }
+
+        match error {
+            ResponseStatus::Error(msg) => assert!(msg.contains("refused")),
+            _ => panic!("Expected Error"),
+        }
+    }
+
+    #[test]
+    fn test_repeater_tcp_flags_brief() {
+        // SYN only
+        let syn = format_tcp_flags_brief(0x02);
+        assert!(syn.contains("S"));
+        assert!(!syn.contains("A"));
+
+        // SYN+ACK
+        let synack = format_tcp_flags_brief(0x12);
+        assert!(synack.contains("S"));
+        assert!(synack.contains("A"));
+
+        // FIN+ACK
+        let finack = format_tcp_flags_brief(0x11);
+        assert!(finack.contains("F"));
+        assert!(finack.contains("A"));
+
+        // RST
+        let rst = format_tcp_flags_brief(0x04);
+        assert!(rst.contains("R"));
+
+        // PSH+ACK
+        let pshack = format_tcp_flags_brief(0x18);
+        assert!(pshack.contains("P"));
+        assert!(pshack.contains("A"));
+    }
+
+    #[test]
+    fn test_repeater_entry_increment_send_count() {
+        let mut entry = RepeaterEntry::new(
+            "Count Test".to_string(),
+            Protocol::Tcp,
+            "127.0.0.1".to_string(),
+            22,
+            RepeaterRequest::Tcp {
+                flags: 0x02,
+                seq_num: 0,
+                ack_num: 0,
+                window_size: 65535,
+                payload: vec![],
+            },
+        );
+
+        assert_eq!(entry.send_count, 0);
+        entry.send_count += 1;
+        assert_eq!(entry.send_count, 1);
+        entry.send_count += 1;
+        assert_eq!(entry.send_count, 2);
     }
 }
