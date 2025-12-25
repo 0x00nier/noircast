@@ -241,7 +241,7 @@ Contributions are welcome. Please ensure:
 
 ## License
 
-MIT License - See LICENSE file for details.
+GPL v3 License - See LICENSE file for details.
 
 ## Author
 
@@ -250,3 +250,4 @@ MIT License - See LICENSE file for details.
 ---
 
 For bug reports and feature requests, please open an issue on the GitHub repository.
+
